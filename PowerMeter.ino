@@ -1,5 +1,9 @@
 /*
  * Power Meter for Dual Directional Coupler with LTC5507
+ 
+ * Copyright (c) 2012 jeff millar, wa1hco
+ * Distributed under the GNU GPL v2. For full terms see the file docs/COPYING.
+ 
  * Functions
  *  Measure Voltage produce by LTC5507
  *  Convert Voltage to Power in Watts
@@ -79,7 +83,7 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);  // LCD1602
 // PWM:              3   5 6    9 10 11
 // !used&PWM         3                11
 // LED:        0 1
-// !used&!PWM      2                     12, 13
+// !used&!PWM      2                     12, 13    // available
 
 // Digital Pins
 int     MeterPinFwd =  3;  // PWM output to Forward meter
@@ -90,9 +94,6 @@ int    BacklightPin = 10;  // high for backlight on
 
 const int   AdcMaxCount = 1023;
 const float AdcMaxVolts = 5.0;
-
-// Meter hang time
-const int tHold = 250;  // msec
 
 // All the analog inputs have the same structure
 // Not all analog inputs use all values
@@ -115,6 +116,10 @@ struct analog_t
     volatile int DisplayTime; // Time elaspsed since last display change
 };
 
+// Define the analog inputs
+struct analog_t Pr;    // Power, Reverse from sampling
+struct analog_t Pf;    // Power, Forward from sampling
+
 // List of all states
 enum state_t 
 {
@@ -122,6 +127,10 @@ enum state_t
   ControlMode
 } DisplayState;
 
+
+// Globals for button press processing
+static int ButtonPressTime = 0;       // 
+const int ButtonPressTimeMax = 5000;  // msec, Max how long button pressed (needed?)
 enum button_t
 {
   NoButton,
@@ -130,27 +139,20 @@ enum button_t
   RightButton, 
   UpButton, 
   DownButton,
-} ButtonPressed;
-
-
-// Define the analog inputs
-struct analog_t Pr;    // Power, Reverse from sampling
-struct analog_t Pf;    // Power, Forward from sampling
-struct analog_t ButtonV;   // Pushbutton analog value
+} ButtonPressed;      // which button pressed
 
 // Message Buffer
 volatile char Message[11] = "wa1hco    ";
 
-const int TimeBetweenInterrupts = 2;  // milliseconds
+const int     TimeBetweenInterrupts =  2;  // msec, time calls to ISR
+const int TimeBetweenDisplayUpdates = 50;  // msec, time calls to Display and Button update
+
+// Meter hang time
+const int tHold = 250;  // msec
 
 // define the LTC5507 offsets, measured at setup, used in curve fit
 float Vol_forward;
 float Vol_reverse;
-
-// Control mode starts with Select, Display mode
-
-static int ButtonPressTime = 0;
-const int ButtonPressTimeMax = 5000;
 
 // Nonvolatile configuration settings
 // read on startup
@@ -179,39 +181,31 @@ const char FwdLimitMode  = 4;
 const char RevLimitMode  = 5;
 
 int ModeIndex = 0;
-const int   ModeIndexMin        =  0;
-const int   ModeIndexMax        =  5;
+const int ModeIndexMin        =  0;
+const int ModeIndexMax        =  5;
 
-char MeterModes[5][16] = {"RAW       ",
-                          "Peak Hang ",
-                          "Peak Fast ",
-                          "Average   "};
+char MeterModes[5][16] = {"RAW",
+                          "Peak Hang",
+                          "Peak Fast",
+                          "Average"};
 
 // Limits on nonvolatile settings
-const float CouplerGainFwdDBMin = -60;
-const float CouplerGainFwdDBMax = -10;
-const float CouplerGainRevDBMin = -60;
-const float CouplerGainRevDBMax = -10;
-const char  MeterModeIndexMin   =  0;
-const char  MeterModeIndexMax   =  3;
-const int   BacklightLevelMin   =  0;
-const int   BacklightLevelMax   =  255;
-const int   LimitFwdMin          =  10;
-const int   LimitFwdMax          =  1500;
-const int   LimitRevMin          =  10;
-const int   LimitRevMax          =  300;
+const float CouplerGainFwdDBMin =   -60;
+const float CouplerGainFwdDBMax =   -10;
+const float CouplerGainRevDBMin =   -60;
+const float CouplerGainRevDBMax =   -10;
+const char  MeterModeIndexMin   =     0;
+const char  MeterModeIndexMax   =     3;
+const int   BacklightLevelMin   =     0;
+const int   BacklightLevelMax   =   255;
+const int   LimitFwdMin         =    10;
+const int   LimitFwdMax         =  1500;
+const int   LimitRevMin         =    10;
+const int   LimitRevMax         =   300;
 
 float CouplerGainFwdLinear;
 float CouplerGainRevLinear;
-char CouplerGainStr[10];
-
-//**************************************************************************
-
-int adc_key_val[5] ={50, 200, 400, 600, 800 };
-int NUM_KEYS = 5;
-int adc_key_in;
-int key=-1;
-int oldkey=-1;
+char  CouplerGainStr[10];
 
 //**************************************************************************
 // Set any out of range nonvolatile value to mid point
@@ -284,7 +278,6 @@ void UpdateAnalogInputs()
 
 //********************************************************************************
 // Enter at TimeInterval = 2 ms
-const int TimeBetweenDisplayUpdates = 50;  // msec
 boolean DisplayFlag = false;
 int IsrTime = 0;  // debugging variable
 //-------------------------------------------
@@ -418,7 +411,7 @@ void LcdBlankScreen()
 // dBm to W conversion takes 380 usec
 // called from main loop
 //------------------------------------------------------
-void DisplayValues() 
+void DisplayPower() 
 {
   int iTemp;
   char DisplayLine[17];  // 16 char, plus new line?
@@ -455,6 +448,13 @@ void DisplayMessage()
   lcd.setCursor(0,0);
   lcd.print("          ");
   lcd.setCursor(0,0);
+}
+
+//*****************************************************************
+// drive the forward over power and reflected over power LEDs
+void DisplayLED()
+{
+  
 }
 
 //------------------------------------------
@@ -715,7 +715,7 @@ void RevLimitControl(int ButtonPressed, int ButtonPressTime)
 
 void DisplayMachine()
 {
-  GetKey();  // set value of ButtonPressed and ButtonPressTime
+  GetKey();  // sets value of ButtonPressed and ButtonPressTime
   switch (DisplayState)  // Control mode or Power Mode
   {
     case ControlMode:  
@@ -795,12 +795,17 @@ void DisplayMachine()
     case PowerMode:
       switch (ButtonPressed)
       {
+        // all buttons but Select just continue to update display
+        case LeftButton:   
+        case RightButton:   
+        case UpButton:      
+        case DownButton: 
         case NoButton:
-          //
-          DisplayValues();      // LCD numbers, P.fwd and P.rev
-          DisplayMeter();       // PWM to meter or bar graph
-          //DisplayMessage();     // 10 characters for debug or faults          
+          DisplayPower();      // LCD numbers, P.fwd and P.rev
+          DisplayMeter();      // PWM to meter or bar graph
+          DisplayLED();     
           break;
+
         case SelectButton:
           // return to power mode
           if (ButtonPressTime == 0)
@@ -809,12 +814,6 @@ void DisplayMachine()
             DisplayCurrentMode(ModeIndex); 
           }
           break;
-        case LeftButton:    // nothing
-        case RightButton:   // nothing
-        case UpButton:      // nothing
-        case DownButton:    // nothing
-        default:
-          { }
       } // switch(ButtonPressed)
       break; // PowerMode
     default: 
@@ -825,17 +824,34 @@ void DisplayMachine()
 
 //*************************************************************************
 // Called at TimeBetweenDisplayUpdates intervals (50 ms)
-// 
+// Sets two global variables
+//  ButtonPressed, enum of select, left, right, up, down
+//  ButtonPressTime, how long held to enable timed press and hold processing
+//**************************************************************************
 void GetKey()
 {
+  const int NUM_KEYS = 5;
+  // buttons ground various resistor, producing different ADC values
+  const int adc_key_val[5] ={50, 200, 400, 600, 800 };
+  static int key=-1;    // initialize to not pressed
+  static int oldkey=-1; // initialize to not pressed
+  int adc_key_in;
+  
   adc_key_in = analogRead(0); // read the value from the sensor 
-  key = get_key(adc_key_in);  // convert into key press
+ 
+  // convert into key press
+  for (key = 0; key < NUM_KEYS; key++)
+    {
+      if ( adc_key_in < adc_key_val[key] ) { break; }
+      if (key >= NUM_KEYS) { key = -1; } // No valid key pressed
+    }
  
   if (key != oldkey)          // if keypress transition is detected
   {
     oldkey = key;
     ButtonPressTime = 0;
-    if (key>=0)        // key pressed
+    ButtonPressed = NoButton;    // default to nobutton, override if key pressed
+    if (key >= 0)        // key pressed
     {
       switch (key)
       {
@@ -856,13 +872,10 @@ void GetKey()
           break;
       } // switch(key)
     } // if(key>0)
-    else // key = -1, not pressed
-    {
-      ButtonPressed = NoButton;
-    } // if(key>= 0)
   }
   else // key == oldkey
   {
+    // increment button press time by time between display updates
     ButtonPressTime += TimeBetweenDisplayUpdates;
     if (ButtonPressTime > ButtonPressTimeMax)
     {
@@ -870,18 +883,6 @@ void GetKey()
     } 
   } // if(key!=oldkey)
 } // GetKey()
-
-// Convert ADC value to key number
-int get_key(unsigned int input)
-{
-    int k;
-    for (k = 0; k < NUM_KEYS; k++)
-    {
-      if (input < adc_key_val[k]) { return k; }
-    }
-    if (k >= NUM_KEYS) { k = -1; } // No valid key pressed
-    return k;
-}
 
 //*******************************************************************************
 // Configure the pins, set outputs to standby
@@ -951,7 +952,7 @@ void setup()
   ButtonPressed = NoButton;
  
   // The serial port 
-  Serial.begin(9600);
+  //Serial.begin(9600);
   
   // setup the timer and start it
   // timer used to read values and run state machine
@@ -961,16 +962,16 @@ void setup()
 } // setup
 
 
-//****************************************************************************
+//*****************************************************************
 // Main Loop, just for display stuff
 // Arduino falls into this after setup()
 // This loop gets interrupted periodically
 // All timed stuff occurs in ISR
-// todo: cli(), sei() to manage interrupts
-//---------------------------------------------
+//--------------------------------------------------------------
 void loop() 
 {
   // watch for signal from interrupt handler
+  // DisplayFlag set in interrupt handler Timebetween 
   if (DisplayFlag == true) 
   {
     DisplayFlag = false;  // clear the flag
