@@ -71,33 +71,22 @@
 #include  <avr/interrupt.h>
 #include       <MsTimer2.h>
 #include     <avr/eeprom.h>
+#include        <Firmata.h>
 
 // Function Prototypes
 // Prototpye for external Watts function written by Matlab
 float Watts( float CouplerGainFwdDB, float Vol, float V );
 
-void     FwdCalControl(int, int);
-void     RevCalControl(int, int);
-void  MeterModeControl(int, int);
-void  BacklightControl(int, int);
-void   FwdLimitControl(int, int);
-void   RevLimitControl(int, int);
-void  MeterTypeControl(int, int);
-void MeterScaleControl(int, int);
-
-typedef void (*fControlPtr)(int, int);
-
-fControlPtr fControl[8] = 
-{ 
-      FwdCalControl,
-      RevCalControl,
-   MeterModeControl,
-   BacklightControl,
-    FwdLimitControl,
-    RevLimitControl,
-   MeterTypeControl,
-  MeterScaleControl 
-};
+// Function prototypes used for building function pointer table
+void        FwdCalControl(int, int);
+void        RevCalControl(int, int);
+void     MeterModeControl(int, int);
+void     BacklightControl(int, int);
+void      FwdLimitControl(int, int);
+void      RevLimitControl(int, int);
+void     MeterTypeControl(int, int);
+void MeterScaleFwdControl(int, int);
+void MeterScaleRevControl(int, int);
 
 // LiquidCrystal(rs, enable, d4, d5, d6, d7) 
 // LCD 1602 also controls backlight on Pin 10
@@ -126,6 +115,7 @@ struct analog_t
            int   Pin;         // Arduino pin number
   volatile int   iADC;        // ADC output in count from 0 to AdcMaxCount
   volatile int   iADCPeak;    // Peak value, holds and decays
+  volatile int   iADCAvg;     // Average value per time constant
   volatile int   PeakTimer;   // Time since peak updated
            float fVolts;      // fCal * iADC
            float fVoltsPeak;  // fCal * iADCPeak
@@ -139,7 +129,7 @@ struct analog_t
 struct analog_t PwrRev;    // Power, Reverse from sampling
 struct analog_t PwrFwd;    // Power, Forward from sampling
 
-// Globals for button press processing
+// button press processing
 static int ButtonPressTime = 0;       // 
 
 enum button_t
@@ -152,8 +142,11 @@ enum button_t
   DownButton,
 } ButtonPressed = NoButton;      // which button pressed
 
-const int     TimeBetweenInterrupts =  2;  // msec, time calls to ISR
+// globals related to interrupt processing
+const int     TimeBetweenInterrupts =  1;  // msec, time calls to ISR
 const int TimeBetweenDisplayUpdates = 50;  // msec, time calls to Display and Button update
+      int                   IsrTime =  0;  // test variable, ISR execution time in msec
+  boolean DisplayFlag = false; 
 
 // define the LTC5507 offsets, measured at setup, used in curve fit
 float OffsetVoltFwd;
@@ -166,42 +159,30 @@ struct settings_t
 {
   float CouplerGainFwdDB;  // -10 to -60 dB
   float CouplerGainRevDB;  // -10 to -60 dB
-  char  MeterModeIndex;    //  
   int   BacklightLevel;    // 0 to 255
   int   LimitRev;          // 0 to 300 Watts
   int   LimitFwd;          // 0 to 2000 Watts
-  int   MeterTypeIndex;     // {Linear, Square Law}
-  int   MeterScaleIndex;    // {1, 2, 5}
+  char  MeterModeIndex;    //  
+  int   MeterTypeIndex;    // {Linear, Square Law}
+  int   MeterScaleFwd;     // 1 to 5000 Watts
+  int   MeterScaleRev;     // 1 to 5000 Watts
+  int   MeterAvgTc;        // 0 to 1000 msec
+  int   MeterDecayTc;      // 0 to 2000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
 
 //**************************************************************************
-// ADC Peak Processing
-// if greater, Update iADCPeak, and start timer 
-// delay tHold, then start decay of value in iADCPeak
-void ADC_Peak(struct analog_t *sig)
+// ADC Peak Processing, called from interrupt context
+// ADCs sample envelope at 1 msec, taking 240 usec
+// Background processing runs at 50 msec, taking 20 msec
+// ADC peak processing captures peak between display updates
+void ADC_Peak(struct analog_t *sig, int DisplayTimeCounter)
 {
-  // Meter hang time
-  const int tHold = 500;  // msec
-  
-  if(sig->iADC > sig->iADCPeak) // if new peak
+  if(sig->iADC > sig->iADCPeak || DisplayTimeCounter == 0) // if new peak, or end of interval
   {
     sig->iADCPeak = sig->iADC;  // save new peak
-    sig->PeakTimer = 0;       // restart peak timer
   } // new peak
-  else // not new peak
-  {
-    if(sig->PeakTimer < tHold) // peak hold not elapsed
-    {  
-      sig->PeakTimer += TimeBetweenInterrupts; // add elapsed time, leave peak alone
-    }
-    else // peak hold elapsed, exponential decay
-    {
-      // Exponential decay
-      sig->iADCPeak *= .998;
-    }
-  } // not new peak
 } // ADC_Peak
 
 // Entered at TimeIncement intervals, 
@@ -211,7 +192,7 @@ void ADC_Peak(struct analog_t *sig)
 // ADC reads occur at 2 ms, 500 Hz
 // Display processing reads values in iAdc and iAdcPeak at 50 ms, 20 Hz
 //-----------------------------------------
-void UpdateAnalogInputs() 
+void UpdateAnalogInputs(int DisplayTimeCounter) 
 {
   // read from the ADC twice close together
   PwrFwd.iADC = analogRead(PwrFwd.Pin); // read the raw ADC value 
@@ -222,21 +203,19 @@ void UpdateAnalogInputs()
   PwrRev. iADC = 0x3ff & (int) millis() >> 3 ;
 
   // ADCs read at 500 Hz, Display updates at 20 Hz, show Peaks
-  ADC_Peak(&PwrFwd);  // Update PwrFwd data structure with peak hold
-  ADC_Peak(&PwrRev);  // Update Pr data structure with peak hold
+  ADC_Peak(&PwrFwd, DisplayTimeCounter);  // Update PwrFwd data structure with peak hold
+  ADC_Peak(&PwrRev, DisplayTimeCounter);  // Update Pr data structure with peak hold
 } // UpdateAnalogInputs()
 
 //********************************************************************************
-// Enter at TimeInterval = 2 ms
-boolean DisplayFlag = false;
-int IsrTime = 0;  // debugging variable
-//-------------------------------------------
+// Enter at TimeInterval specified in global
+// calls UpdateAnalogInputs() to read ADCs
+// Sets DisplayFlag when it's time to update Display
 void TimedService() 
 {
   static int DisplayTimeCounter = 0;
   // debug
   IsrTime = micros(); 
-  UpdateAnalogInputs();
   // set a flag periodically to run display update
   DisplayTimeCounter += TimeBetweenInterrupts;
   if (DisplayTimeCounter > TimeBetweenDisplayUpdates) 
@@ -244,6 +223,9 @@ void TimedService()
     DisplayTimeCounter = 0;
     DisplayFlag = true;
   }
+  
+  UpdateAnalogInputs(DisplayTimeCounter);
+
   // debug
   IsrTime = micros() - IsrTime;
 }
@@ -303,8 +285,6 @@ void CalculatePower()
 void DisplayPower() 
 {
   CalculatePower();  // Peak ADC readings used to fill in Watts
-  PwrFwd.fWatts = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsPeak - OffsetVoltFwd); 
-  //PwrFwd.fWatts  =  PwrFwd.fCal * (float) iAdcLocal-OffsetVoltFwd;
   //SmoothDisplay(&PwrFwd, PwrFwd.fWatts);
   lcd.setCursor(0,0);
   lcd.print("Pwr Fwd ");
@@ -312,7 +292,6 @@ void DisplayPower()
   lcd.print(LcdString);
   lcd.print("W   ");
 
-  PwrRev.fWatts = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsPeak - OffsetVoltRev); 
   //SmoothDisplay(&PwrRev, PwrRev.fWatts);
   lcd.setCursor(0,1);
   lcd.print("Pwr Rev ");
@@ -323,7 +302,8 @@ void DisplayPower()
 
 
 //*****************************************************************
-// drive the forward over power and reflected over power LEDs
+// Drive the forward over power and reflected over power LEDs
+// also add a "*" to the display
 void DisplayLED()
 {
   if( PwrFwd.fWatts > Settings.LimitFwd )
@@ -354,10 +334,37 @@ void DisplayLED()
 }
 
 //*******************************************************************
-// Settings.MeterMode
-// Settings.MeterType
-// Settings.MeterScale
+// Settings.MeterMode: RAW, Peak Hang, Peak Fast, Average
+// Settings.MeterType: Power, SquareLaw, dBm
+// Settings.MeterScale Fwd, Rev: 1 to 5000W
 // Called at display update time
+
+// See: http://sound.westhost.com/project55.htm 
+// Peak Program Meter:  
+//   A standard PPM has a 5ms integration time, so that only peaks wide 
+//   enough to be audible are displayed. This translates into a response that is 
+//     1dB down from a steady state reading for a 10ms tone burst, 
+//     2dB down for a 5ms burst, and 
+//     4dB down for a 3 ms burst. 
+//   These requirements are satisfied by an attack time constant of 1.7ms. 
+//   The decay rate of 1.5 seconds to a -20dB level (IEC specified) is met using a 650 ms time constant.
+// VU:  
+//   A VU meter is designed to have a relatively slow response. It is driven from a 
+//   full-wave averaging circuit defined to reach 99% full-scale deflection in 300ms and 
+//   overshoot not less than 1% and not more than 1.5%. 
+//   Since a VU meter is optimised for perceived loudness it is not a good indicator of 
+//   peak (transient) performance. 
+//   Nominal sensitivity for 0VU is 1.228V RMS, and the impedance is 3.9k. 
+// Also see http://en.wikipedia.org/wiki/Peak_programme_meter   
+//   Type II PPMs fall back 24 dB in 2.8 seconds.
+
+// Meter Characteristics
+//    Integration Time Constant
+//    Hold Time
+//    Decay time Constant
+
+// Settings.iAdcPeak has the peak voltage between display updates
+// iAdcAvg = .1 * iAdc + .9 * iAdcAvg
 void DisplayMeter() 
 {
   int dBm;
@@ -401,10 +408,9 @@ void serial()
 void FwdCalControl(int ButtonPressed, int ButtonPressTime)
 {
   // update display on every pass to keep Watts Display up to date
-  const float CouplerGainFwdDBMin =   -60;
-  const float CouplerGainFwdDBMax =   -10;
-  if(Settings.CouplerGainFwdDB < CouplerGainFwdDBMin || Settings.CouplerGainFwdDB > CouplerGainFwdDBMax)
-    { Settings.CouplerGainFwdDB = (CouplerGainFwdDBMin + CouplerGainFwdDBMax)/2; }
+  const float CouplerGainFwdDBMin = -60;
+  const float CouplerGainFwdDBMax = -10;
+
   switch (ButtonPressed)
   {
     case SelectButton:      // Still pressed from entering Control mode
@@ -413,15 +419,18 @@ void FwdCalControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:
       Settings.CouplerGainFwdDB += 0.1 * .001 * ButtonPressTime;
-      if (Settings.CouplerGainFwdDB > CouplerGainFwdDBMax)
-        { Settings.CouplerGainFwdDB = CouplerGainFwdDBMax; }
       break;
     case DownButton:          
       Settings.CouplerGainFwdDB -= 0.1 * .001 * ButtonPressTime;
-      if (Settings.CouplerGainFwdDB < CouplerGainFwdDBMin)
-        { Settings.CouplerGainFwdDB = CouplerGainFwdDBMin; }
       break;
   } // switch(ButtonPressed)
+  
+  // Check range, works for up/down, no button, EEPROM initialization
+  if (Settings.CouplerGainFwdDB < CouplerGainFwdDBMin)
+    { Settings.CouplerGainFwdDB = CouplerGainFwdDBMin; }
+  if (Settings.CouplerGainFwdDB > CouplerGainFwdDBMax)
+    { Settings.CouplerGainFwdDB = CouplerGainFwdDBMax; }
+
   // first line shows directional coupler
   lcd.setCursor(0,0);
   lcd.print("Fwd Cplr ");
@@ -439,10 +448,8 @@ void FwdCalControl(int ButtonPressed, int ButtonPressTime)
 //******************************************************************************
 void RevCalControl(int ButtonPressed, int ButtonPressTime)
 {
-  const float CouplerGainRevDBMin =   -60;
-  const float CouplerGainRevDBMax =   -10;
-  if(Settings.CouplerGainRevDB < CouplerGainRevDBMin || Settings.CouplerGainRevDB > CouplerGainRevDBMax)
-    { Settings.CouplerGainRevDB = (CouplerGainRevDBMin + CouplerGainRevDBMax)/2; }
+  const float CouplerGainRevDBMin = -60;
+  const float CouplerGainRevDBMax = -10;
 
   switch (ButtonPressed)
   {
@@ -452,15 +459,18 @@ void RevCalControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:            
       Settings.CouplerGainRevDB += 0.1 * .001 * ButtonPressTime;
-      if (Settings.CouplerGainRevDB > CouplerGainRevDBMax)
-        { Settings.CouplerGainRevDB = CouplerGainRevDBMax; }
       break;
     case DownButton:
       Settings.CouplerGainRevDB -= 0.1 * .001 * ButtonPressTime;
-      if (Settings.CouplerGainRevDB < CouplerGainRevDBMin)
-        { Settings.CouplerGainRevDB = CouplerGainRevDBMin; }     
       break;
   } // switch(ButtonPressed)
+
+  // Check range, works for up/down, no button, EEPROM initialization
+  if (Settings.CouplerGainRevDB < CouplerGainRevDBMin)
+    { Settings.CouplerGainRevDB = CouplerGainRevDBMin; }     
+  if (Settings.CouplerGainRevDB > CouplerGainRevDBMax)
+    { Settings.CouplerGainRevDB = CouplerGainRevDBMax; }
+
   //  First line, coupler gains
   lcd.setCursor(0,0);
   lcd.print("Rev Cplr ");
@@ -476,55 +486,13 @@ void RevCalControl(int ButtonPressed, int ButtonPressTime)
 }
 
 //******************************************************************************
-void MeterModeControl(int ButtonPressed, int ButtonPressTime)
-{
-   const char MeterModes[5][16] = {"RAW",
-                                  "Peak Hang",
-                                  "Peak Fast",
-                                  "Average"};
-  // handle corrupt or unitialized EERPOM
-  const char  MeterModeIndexMin   =     0;
-  const char  MeterModeIndexMax   =     3;
-  if(Settings.MeterModeIndex < MeterModeIndexMin || Settings.MeterModeIndex > MeterModeIndexMax)
-    { Settings.MeterModeIndex = (MeterModeIndexMin + MeterModeIndexMax)/2; }
-  if (ButtonPressTime == 0 )
-  {
-    switch (ButtonPressed)
-    {
-      case SelectButton:      // pressed to exit Select mode
-      case LeftButton:        // after changing to this mode from Left
-      case RightButton:       // after changing to this mode from Right
-        break;
-      case UpButton:     
-        if(Settings.MeterModeIndex < MeterModeIndexMax) 
-          { Settings.MeterTypeIndex += 1; }
-        else if(Settings.MeterModeIndex == MeterModeIndexMax)
-          { Settings.MeterModeIndex = MeterModeIndexMin; }
-        break;
-      case DownButton:   
-        if(Settings.MeterModeIndex > MeterModeIndexMin) 
-          { Settings.MeterModeIndex -= 1; }      
-        else if(Settings.MeterModeIndex == MeterModeIndexMin)
-          { Settings.MeterModeIndex = MeterModeIndexMax; }
-        break;
-  } // switch(ButtonPressed)
-  }
-  lcd.setCursor(0,0);
-  lcd.print("Meter Dynamics  ");
-  lcd.setCursor(0,1);
-  lcd.print(MeterModes[Settings.MeterModeIndex]);
-  lcd.print("                ");  // finish out the line with blanks  
-}
-
-//******************************************************************************
 // called in Control Mode for any button press
 void BacklightControl(int ButtonPressed, int ButtonPressTime)
 {
   // handle corrupt or unitialized EERPOM
-  const int   BacklightLevelMin   =     0;
-  const int   BacklightLevelMax   =   255;
-  if(Settings.BacklightLevel < BacklightLevelMin || Settings.BacklightLevel > BacklightLevelMax)
-    { Settings.BacklightLevel = (BacklightLevelMin + BacklightLevelMax)/2; }
+  const int   BacklightLevelMin =   0;
+  const int   BacklightLevelMax = 255;
+
   switch (ButtonPressed)
   {
     case SelectButton:      // pressed to exit Select mode
@@ -533,17 +501,20 @@ void BacklightControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:
       Settings.BacklightLevel += 1 * .001 * ButtonPressTime;
-      if (Settings.BacklightLevel > BacklightLevelMax) 
-        { Settings.BacklightLevel = BacklightLevelMax; }
-      analogWrite(BacklightPin, Settings.BacklightLevel);  // Set backlight brightness              
       break;
     case DownButton:
       Settings.BacklightLevel -= 1 * .001 * ButtonPressTime;
-      if (Settings.BacklightLevel < BacklightLevelMin) 
-        { Settings.BacklightLevel = BacklightLevelMin; }
-      analogWrite(BacklightPin, Settings.BacklightLevel);  // Set backlight brightness              
       break;
   } // switch(ButtonPressed)
+
+  // Check range, works for up/down, no button, EEPROM initialization
+  if (Settings.BacklightLevel < BacklightLevelMin) 
+    { Settings.BacklightLevel = BacklightLevelMin; }
+  if (Settings.BacklightLevel > BacklightLevelMax) 
+    { Settings.BacklightLevel = BacklightLevelMax; }
+
+  analogWrite(BacklightPin, Settings.BacklightLevel);  // Set backlight brightness              
+
   lcd.setCursor(0,0);
   lcd.print("Backlight ");
   lcd.print((100 * Settings.BacklightLevel) / BacklightLevelMax);
@@ -560,10 +531,8 @@ void BacklightControl(int ButtonPressed, int ButtonPressTime)
 void FwdLimitControl(int ButtonPressed, int ButtonPressTime)
 {
   // handle corrupt or unitialized EERPOM
-  const int   LimitFwdMin         =    10;
-  const int   LimitFwdMax         =  1500;
-  if(Settings.LimitFwd < LimitFwdMin || Settings.LimitFwd > LimitFwdMax)
-    { Settings.LimitFwd = (LimitFwdMin + LimitFwdMax)/2; }
+  const int   LimitFwdMin =   10;
+  const int   LimitFwdMax = 1500;
 
   switch (ButtonPressed)
   {
@@ -573,15 +542,18 @@ void FwdLimitControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:
       Settings.LimitFwd += 1 * .001 * ButtonPressTime;
-      if (Settings.LimitFwd > LimitFwdMax)
-        { Settings.LimitFwd = LimitFwdMax; }
-      break;
+     break;
     case DownButton:          
       Settings.LimitFwd -= 1 * .001 * ButtonPressTime;
-      if (Settings.LimitFwd < LimitFwdMin)
-        { Settings.LimitFwd = LimitFwdMin; }
-      break;
+     break;
   } // switch(ButtonPressed)
+
+  // Check range, works for up/down, no button, EEPROM initialization
+  if (Settings.LimitFwd < LimitFwdMin)
+    { Settings.LimitFwd = LimitFwdMin; } 
+  if (Settings.LimitFwd > LimitFwdMax)
+    { Settings.LimitFwd = LimitFwdMax; }
+
   lcd.setCursor(0,0);
   lcd.print("Fwd Limit ");
   lcd.print(Settings.LimitFwd);
@@ -598,10 +570,8 @@ void FwdLimitControl(int ButtonPressed, int ButtonPressTime)
 void RevLimitControl(int ButtonPressed, int ButtonPressTime)
 {
   // handle corrupt or unitialized EERPOM 
-  const int   LimitRevMin         =    10;
-  const int   LimitRevMax         =   300;
-  if(Settings.LimitRev < LimitRevMin || Settings.LimitRev > LimitRevMax)
-    { Settings.LimitRev = (LimitRevMin + LimitRevMax)/2; } 
+  const int   LimitRevMin =  10;
+  const int   LimitRevMax = 300;
 
   switch (ButtonPressed)
   {
@@ -611,15 +581,18 @@ void RevLimitControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:            
       Settings.LimitRev += 1 * .001 * ButtonPressTime;
-      if (Settings.LimitRev > LimitRevMax)
-        { Settings.LimitRev = LimitRevMax; }
       break;
     case DownButton:
       Settings.LimitRev -= 1 * .001 * ButtonPressTime;
-      if (Settings.LimitRev < LimitRevMin)
-        { Settings.LimitRev = LimitRevMin; }     
       break;
   } // switch(ButtonPressed)
+
+  // Check range, works for up/down, no button, EEPROM initialization
+  if (Settings.LimitRev < LimitRevMin)
+    { Settings.LimitRev = LimitRevMin; }     
+  if (Settings.LimitRev > LimitRevMax)
+    { Settings.LimitRev = LimitRevMax; }
+
   lcd.setCursor(0,0);
   lcd.print("Rev Limit ");
   lcd.print(Settings.LimitRev);
@@ -629,21 +602,17 @@ void RevLimitControl(int ButtonPressed, int ButtonPressTime)
 }
 
 //******************************************************************************
-// Controls what type of marking ar on the meter
-//    Linear for regular volt/amp meter
-//    Square Law for Bird Watt Meter type scale
-void MeterTypeControl(int ButtonPressed, int ButtonPressTime)
+void MeterModeControl(int ButtonPressed, int ButtonPressTime)
 {
-  const char MeterTypes[5][16] = {"Linear",
-                                  "Square Law"};
-  const int MeterTypeIndexMin = 0;
-  const int MeterTypeIndexMax = 1;
+   const char MeterModes[5][16] = {"RAW",
+                                   "Peak Hang",
+                                   "Peak Fast",
+                                   "Average"};
+  // handle corrupt or unitialized EERPOM
+  const char  MeterModeIndexMin = 0;
+  const char  MeterModeIndexMax = 3;
 
-  // handle corrupt or unitialized EERPOM  
-  if(Settings.MeterTypeIndex < MeterTypeIndexMin || Settings.MeterTypeIndex > MeterTypeIndexMax)
-    { Settings.MeterTypeIndex = MeterTypeIndexMin; }
-  
-  if (ButtonPressTime == 0)  //skip display update most of the time
+  if (ButtonPressTime == 0 )
   {
     switch (ButtonPressed)
     {
@@ -652,19 +621,62 @@ void MeterTypeControl(int ButtonPressed, int ButtonPressTime)
       case RightButton:       // after changing to this mode from Right
         break;
       case UpButton:     
-        if(Settings.MeterTypeIndex < MeterTypeIndexMax) 
-          { Settings.MeterTypeIndex += 1; }
-        else if(Settings.MeterTypeIndex == MeterTypeIndexMax)
-          { Settings.MeterTypeIndex = MeterTypeIndexMin; }
+        Settings.MeterTypeIndex += 1;
         break;
       case DownButton:   
-        if(Settings.MeterTypeIndex > MeterTypeIndexMin) 
-          { Settings.MeterTypeIndex -= 1; }      
-        else if(Settings.MeterTypeIndex == MeterTypeIndexMin)
-          { Settings.MeterTypeIndex = MeterTypeIndexMax; }
+        Settings.MeterModeIndex -= 1;
         break;
     } // switch(ButtonPressed)
-  } // if (!NoButton)  
+  } // if(ButtonPressTime == 0)
+
+  // Check range, works for up/down, no button, EEPROM initialization
+  if(Settings.MeterModeIndex < MeterModeIndexMin) 
+    { Settings.MeterModeIndex = MeterModeIndexMin; }      
+  if(Settings.MeterModeIndex > MeterModeIndexMax) 
+    { Settings.MeterTypeIndex = MeterModeIndexMax; }
+
+  lcd.setCursor(0,0);
+  lcd.print("Meter Dynamics  ");
+  lcd.setCursor(0,1);
+  lcd.print(MeterModes[Settings.MeterModeIndex]);
+  lcd.print("                ");  // finish out the line with blanks  
+}
+
+//******************************************************************************
+// Controls what type of marking ar on the meter
+//    Linear for regular volt/amp meter
+//    Square Law for Bird Watt Meter type scale
+void MeterTypeControl(int ButtonPressed, int ButtonPressTime)
+{
+  const char MeterTypes[5][16] = {"Linear",
+                                  "Square Law",
+                                  "dBm"};
+  const int MeterTypeIndexMin = 0;
+  const int MeterTypeIndexMax = 2;
+
+  if (ButtonPressTime == 0)
+  {
+    switch (ButtonPressed)
+    {
+      case SelectButton:      // pressed to exit Select mode
+      case LeftButton:        // after changing to this mode from Left
+      case RightButton:       // after changing to this mode from Right
+        break;
+      case UpButton:     
+        Settings.MeterTypeIndex += 1;
+        break;
+      case DownButton:   
+        Settings.MeterTypeIndex -= 1;
+        break;
+    } // switch(ButtonPressed)
+  } // if (ButtonPressTime == 0)  
+
+  // Limit Range in all cases, even if no button pressed
+  if( Settings.MeterTypeIndex > MeterTypeIndexMax ) 
+    { Settings.MeterTypeIndex = MeterTypeIndexMin; }  // wrap around
+  if( Settings.MeterTypeIndex < MeterTypeIndexMin )
+    { Settings.MeterTypeIndex = MeterTypeIndexMax; }  // wrap around
+
   lcd.setCursor(0,0);
   lcd.print("Meter Type      ");
   lcd.setCursor(0,1);
@@ -673,80 +685,132 @@ void MeterTypeControl(int ButtonPressed, int ButtonPressTime)
 }
 
 //******************************************************************************
-void MeterScaleControl(int ButtonPressed, int ButtonPressTime)
+// Define the Meter Scale
+void MeterScaleFwdControl(int ButtonPressed, int ButtonPressTime)
 {
-  const char MeterScales[12][16] = {"  10", "  20", "  25", "  50",
-                                    " 100", " 200", " 250", " 500",
-                                    "1000", "2000", "2500", "5000"};
-  const int MeterScaleIndexMin = 0;
-  const int MeterScaleIndexMax = 11;  
+  const int MeterScaleMin = 1;
+  const int MeterScaleMax = 5000;  
   
-  if(Settings.MeterScaleIndex < MeterScaleIndexMin || Settings.MeterScaleIndex > MeterScaleIndexMax)
-    { Settings.MeterScaleIndex = MeterScaleIndexMin; }
-  
-  // Process leading edge of button presses, no press and hold  
-  if (ButtonPressed != NoButton && ButtonPressTime == 0) 
+  switch (ButtonPressed)
   {
-    switch (ButtonPressed)
-    {
-      case SelectButton:      // pressed to exit Select mode
-      case LeftButton:        // after changing to this mode from Left
-      case RightButton:       // after changing to this mode from Right
-        break;
-      case UpButton:  
-        if(Settings.MeterScaleIndex < MeterScaleIndexMax) 
-          { Settings.MeterScaleIndex += 1; }   
-        else if(Settings.MeterScaleIndex == MeterScaleIndexMax)
-          { Settings.MeterScaleIndex = MeterScaleIndexMin;}
-        break;
-      case DownButton:            
-        if(Settings.MeterScaleIndex > MeterScaleIndexMin) 
-          { Settings.MeterScaleIndex -= 1; }  
-        else if(Settings.MeterScaleIndex == MeterScaleIndexMin)
-          { Settings.MeterScaleIndex = MeterScaleIndexMax;}
-        break;
-    } // switch(ButtonPressed)
-  } // if (!NoButton)  
+    case SelectButton:      // Button still pressed
+    case LeftButton:        // after changing to this mode from Left
+    case RightButton:       // after changing to this mode from Right
+      break;
+    case UpButton:  
+      Settings.MeterScaleFwd += 1 * .002 * ButtonPressTime;
+      break;
+    case DownButton:            
+      Settings.MeterScaleFwd -= 1 * .002 * ButtonPressTime;
+      break;
+  } // switch(ButtonPressed)
+  // Limit range to between Min and Max
+  if( Settings.MeterScaleFwd < MeterScaleMin) 
+    { Settings.MeterScaleFwd = MeterScaleMin; }   
+  if( Settings.MeterScaleFwd > MeterScaleMax)
+    { Settings.MeterScaleFwd = MeterScaleMax; }   
   lcd.setCursor(0,0);
-  lcd.print("Meter Scale Max ");
+  lcd.print("Meter Fwd Max ");
   lcd.setCursor(0,1);
-  lcd.print(MeterScales[Settings.MeterScaleIndex]);
+  lcd.print(Settings.MeterScaleFwd);
   lcd.print("                ");  // finish out the line with blanks  
 }
 
-//********************************************************************
-// called on entering new control mode
-// called on every display update when Up or Down button is pressed
-// called with select button still pressed
-void ProcessCurrentMode(int ModeIndex)
+//******************************************************************************
+// Define the Meter Scale
+void MeterScaleRevControl(int ButtonPressed, int ButtonPressTime)
 {
-  switch (ModeIndex) // FwdMode=0, RevMode=1, MeterMode=2, BacklightMode=3
-    {
-      case 0:  // Fwd Calibration
-        FwdCalControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 1:  // Rev Calibration
-        RevCalControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 2:  // Meter Mode
-        MeterModeControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 3:  // Backlight Level
-        BacklightControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 4:  // Fwd Limit
-        FwdLimitControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 5:  // Rev Limit 
-        RevLimitControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 6:  // 
-        MeterTypeControl(ButtonPressed, ButtonPressTime);
-        break;
-      case 7:  // 
-        MeterScaleControl(ButtonPressed, ButtonPressTime);
-        break;
-    } // switch(ModeIndex
+  const int MeterScaleMin = 1;
+  const int MeterScaleMax = 5000;  
+  
+  switch (ButtonPressed)
+  {
+    case SelectButton:      // Button still pressed
+    case LeftButton:        // after changing to this mode from Left
+    case RightButton:       // after changing to this mode from Right
+      break;
+    case UpButton:  
+      Settings.MeterScaleRev += 1 * .002 * ButtonPressTime;
+      break;
+    case DownButton:            
+      Settings.MeterScaleRev -= 1 * .002 * ButtonPressTime;
+      break;
+  } // switch(ButtonPressed)
+  // Limit range to between Min and Max
+  if( Settings.MeterScaleRev < MeterScaleMin ) 
+    { Settings.MeterScaleRev = MeterScaleMin; }   
+  if( Settings.MeterScaleRev > MeterScaleMax )
+    { Settings.MeterScaleRev = MeterScaleMax; }   
+  lcd.setCursor(0,0);
+  lcd.print("Meter Rev Max ");
+  lcd.setCursor(0,1);
+  lcd.print(Settings.MeterScaleRev);
+  lcd.print("                ");  // finish out the line with blanks  
+}
+
+//******************************************************************************
+// Define the Meter Averaging Time Constant
+void MeterAvgTcControl(int ButtonPressed, int ButtonPressTime)
+{
+  const int MeterAvgTcMin = 1;
+  const int MeterAvgTcMax = 5000;  
+  
+  switch (ButtonPressed)
+  {
+    case SelectButton:      // Button still pressed
+    case LeftButton:        // after changing to this mode from Left
+    case RightButton:       // after changing to this mode from Right
+      break;
+    case UpButton:  
+      Settings.MeterAvgTc += 1 * .002 * ButtonPressTime;
+      break;
+    case DownButton:            
+      Settings.MeterAvgTc -= 1 * .002 * ButtonPressTime;
+      break;
+  } // switch(ButtonPressed)
+  // Limit range to between Min and Max
+  if( Settings.MeterAvgTc < MeterAvgTcMin ) 
+    { Settings.MeterAvgTc = MeterAvgTcMin; }   
+  if( Settings.MeterAvgTc > MeterAvgTcMax )
+    { Settings.MeterAvgTc = MeterAvgTcMax; }   
+  lcd.setCursor(0,0);
+  lcd.print("Meter Avg TC ");
+  lcd.setCursor(0,1);
+  lcd.print(Settings.MeterAvgTc);
+  lcd.print("                ");  // finish out the line with blanks  
+}
+
+//******************************************************************************
+// Define the Meter Decay Time Constand
+//
+void MeterDecayTcControl(int ButtonPressed, int ButtonPressTime)
+{
+  const int MeterDecayTcMin = 0;
+  const int MeterDecayTcMax = 2000;  
+  
+  switch (ButtonPressed)
+  {
+    case SelectButton:      // Button still pressed
+    case LeftButton:        // after changing to this mode from Left
+    case RightButton:       // after changing to this mode from Right
+      break;
+    case UpButton:  
+      Settings.MeterDecayTc += 1 * .002 * ButtonPressTime;
+      break;
+    case DownButton:            
+      Settings.MeterDecayTc -= 1 * .002 * ButtonPressTime;
+      break;
+  } // switch(ButtonPressed)
+  // Limit range to between Min and Max
+  if( Settings.MeterDecayTc < MeterDecayTcMin ) 
+    { Settings.MeterDecayTc = MeterDecayTcMin; }   
+  if( Settings.MeterDecayTc > MeterDecayTcMax )
+    { Settings.MeterDecayTc = MeterDecayTcMax; }   
+  lcd.setCursor(0,0);
+  lcd.print("Meter Decay Tc ");
+  lcd.setCursor(0,1);
+  lcd.print(Settings.MeterDecayTc);
+  lcd.print("                ");  // finish out the line with blanks  
 }
 
 //***********************************************************************
@@ -757,7 +821,6 @@ void ProcessPowerDisplay()
   DisplayLED();     
 }
 
-
 //******************************************************************************
 // state machine, Entered at timed intervals
 // switch on Control vs Power Display mode
@@ -766,26 +829,45 @@ void ProcessPowerDisplay()
 // Up and Down handled in the Control routines
 // then call ProcessControlMode(ModeIndex) which branches to control routines
 void DisplayMachine()
-{
-
+{ 
   // List of all states
   enum state_t 
   { PowerMode, ControlMode };
-  
   static state_t DisplayState = PowerMode;
-
-  const char FwdMode         = 0;
-  const char RevMode         = 1;
-  const char MeterMode       = 2;
-  const char BacklightMode   = 3;
-  const char FwdLimitMode    = 4;
-  const char RevLimitMode    = 5;
-  const char MeterTypeMode   = 6;
-  const char MeterScaleMode  = 7;
   
-  static int ModeIndex       = 0;
-   const int ModeIndexMin    = 0;
-   const int ModeIndexMax    = 7;
+  // define type for a pointer to a control function
+  typedef void (*fControlPtr)(int, int);
+  // build an array of control routine pointers.
+  fControlPtr fControl[11] = 
+  { 
+           FwdCalControl,
+           RevCalControl,
+        MeterModeControl,
+        BacklightControl,
+         FwdLimitControl,
+         RevLimitControl,
+        MeterTypeControl,
+    MeterScaleFwdControl,
+    MeterScaleRevControl,
+       MeterAvgTcControl,
+     MeterDecayTcControl
+  };
+  
+  const char           FwdMode =  0;
+  const char           RevMode =  1;
+  const char         MeterMode =  2;
+  const char     BacklightMode =  3;
+  const char      FwdLimitMode =  4;
+  const char      RevLimitMode =  5;
+  const char     MeterTypeMode =  6;
+  const char MeterScaleFwdMode =  7;
+  const char MeterScaleRevMode =  8;
+  const char    MeterAvgTcMode =  9;
+  const char  MeterDecayTcMode = 10;
+  
+  static int ModeIndex    = 0;
+   const int ModeIndexMin = 0;
+   const int ModeIndexMax = 10;
 
   const int ControlTimeout = 5000; // timeout in 5 seconds
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
@@ -836,7 +918,10 @@ void DisplayMachine()
           // handled in ProcessCurrentMode()    
           break; 
       }  // switch(ButtonPressed)
-      ProcessCurrentMode(ModeIndex);
+      
+      // Call Control routine using the function point array      
+      (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);
+      
       break;  // ControlMode
 
     case PowerMode:
@@ -856,7 +941,10 @@ void DisplayMachine()
           if (ButtonPressTime == 0)
           {
             DisplayState = ControlMode;
-            ProcessCurrentMode(ModeIndex); // starts mode display on Select
+            
+            // Call Control routine using the function point array
+            (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);
+            
           }
           else
           {
@@ -976,20 +1064,6 @@ void setup()
   PwrFwd.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iADC to float Volts
   PwrRev.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iADC to float Volts
 
-  
-  // TODO: Very wrong as written
-  // Idea: Amp has limits on Pf and Pr in Watts, convert back to ADC for fast compare
-  // Limits in floating point
-  //PwrFwd.fWattsMax  = 1250.0;  // Watts
-  //PwrRev.fWattsMax  =  100.0;  // Watts
-   
-  //PwrFwd.iADCMax = PwrFwd.fVoltsMax / PwrFwd.fCal; //TODO: not right
-  //PwrRev.iADCMax = PwrRev.fVoltsMax / PwrRev.fCal; //TODO: not right
-  
-  // convert gain of coupler from dB to linear
-  //CouplerGainFwdLinear = pow(10, Settings.CouplerGainFwdDB/10);
-  //CouplerGainRevLinear = pow(10, Settings.CouplerGainRevDB/10);
-  
   // Read Forward and Reverse ADC values, assuming no RF to set Vol
   PwrFwd.fVolts = PwrFwd.fCal * analogRead(PwrFwd.iADC);
   PwrRev.fVolts = PwrRev.fCal * analogRead(PwrRev.iADC);
@@ -1004,6 +1078,9 @@ void setup()
   // The serial port 
   //Serial.begin(9600);
   
+  Firmata.setFirmwareVersion(0,1);
+  Firmata.begin();
+  
   // setup the timer and start it
   // timer used to read values and run state machine
   MsTimer2::set(TimeBetweenInterrupts, TimedService); // 2ms period
@@ -1015,6 +1092,7 @@ void setup()
 //*****************************************************************
 // Main Loop, just for display stuff
 // Arduino falls into this after setup()
+// Loop executes in about 14 to 19 msec
 // This loop gets interrupted periodically
 // All timed stuff occurs in ISR
 //--------------------------------------------------------------
@@ -1024,8 +1102,18 @@ void loop()
   // DisplayFlag set in interrupt handler Timebetween 
   if (DisplayFlag == true) 
   {
+    int DisplayTime;
     DisplayFlag = false;  // clear the flag
+    DisplayTime = micros();
     DisplayMachine();     // state machine based on ButtonPressed
-    serial();             // put info on serial port
+    // Measure time to process data and display, about 14-19 msec
+    //DisplayTime = micros() - DisplayTime;
+    //lcd.setCursor(0,0);
+    //lcd.print(IsrTime);
+    //lcd.setCursor(0,1);
+    //lcd.print(DisplayTime/1000.0, 1);
+    //lcd.print(" ");
+    //delay(20);
+    //serial();             // put info on serial port
   }
 }
