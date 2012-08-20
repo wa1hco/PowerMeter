@@ -79,6 +79,7 @@ void      RevLimitControl(int, int);  // Watts, when to indicate
 void     MeterTypeControl(int, int);  // Watts, dBm (not used, yet)
 void MeterScaleFwdControl(int, int);  // Max scale on bar graph
 void MeterScaleRevControl(int, int);  // Max scale on bar graph
+void  PeakHoldTimeControl(int, int);  //
 
 // Define SainSmart LCD 1602
 const int RowPerDisplay =  2;
@@ -105,6 +106,7 @@ struct analog_t
            int   Pin;         // Arduino pin number
   volatile int   iAdc;        // ADC output in count from 0 to AdcMaxCount
   volatile int   iAdcAvg;     // Average value per time constant
+  volatile int   iAdcPeak;    // Peak for holding numerical display
            float fVolts;      // fCal * iAdc
            float fVoltsAvg;   // IIR filtered average
            float fWatts;      // Power after curve fit
@@ -165,6 +167,7 @@ struct settings_t
   float MeterScaleRev;     // 1 to 5000 Watts
   float MeterAvgTc;        // 0 to 1000 msec
   float MeterDecayTc;      // 0 to 2000 msec
+  float PeakHoldTime;      // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -174,7 +177,10 @@ char LcdString[17];  // for sprintf, include null term, needed ???
 // Called from interrupt context, ADC reads occur at 2 ms, 500 Hz
 // read both ADC input close together in time
 // then do the peak processing
-void UpdateAnalogInputs(int DisplayTimeCounter) 
+// iAdc: latest reading
+// iAdcAvg: Bar graph value, smoothed with IIR filter, programmable Up/Dn TC
+// iAdcPeak: numerical value, peaks held for programmable time
+void UpdateAnalogInputs() 
 {
   // read from the ADC twice, close together in time
   PwrFwd.iAdc = analogRead(PwrFwd.Pin); // read the raw ADC value 
@@ -212,6 +218,24 @@ void UpdateAnalogInputs(int DisplayTimeCounter)
     {
       PwrRev.iAdcAvg = (int)(PwrRev.iAdc* -fAdcDecayCoef + PwrRev.iAdcAvg*(1.0-fAdcDecayCoef));
     }
+  
+  // if(iAdc > Limit) display '*' at char position 15
+  
+  static int PeakTimer = 0;
+  if(PwrFwd.iAdc > PwrFwd.iAdcPeak)
+    {
+      PwrFwd.iAdcPeak = PwrFwd.iAdc;
+      PeakTimer = 0;
+    }
+  else
+    {
+      PeakTimer += TimeBetweenInterrupts;
+      if(PeakTimer > Settings.PeakHoldTime)
+        {
+           
+        }
+    }
+  
 } // UpdateAnalogInputs()
 
 //*********************************************************************************
@@ -238,7 +262,7 @@ void TimedService()
     DisplayFlag = true;
   }
   
-  UpdateAnalogInputs(DisplayTimeCounter);
+  UpdateAnalogInputs();
 
   // debug
   IsrTime = micros() - IsrTime;
@@ -792,6 +816,48 @@ void MeterDecayTcControl(int ButtonPressed, int ButtonPressTime)
   lcd.print("                ");  // finish out the line with blanks  
 }
 
+//******************************************************************************
+// Define the Meter Decay Time Constand
+//
+void PeakHoldTimeControl(int ButtonPressed, int ButtonPressTime)
+{
+  const float PeakHoldTimeMin = 0.0;
+  const float PeakHoldTimeMax = 1000.0;  
+  
+  // Limit range to between Min and Max
+  if( Settings.PeakHoldTime < PeakHoldTimeMin ) 
+    { Settings.PeakHoldTime = PeakHoldTimeMin; }   
+  if( Settings.PeakHoldTime > PeakHoldTimeMax )
+    { Settings.PeakHoldTime = PeakHoldTimeMax; }
+
+  switch (ButtonPressed)
+  {
+    case SelectButton:      // Button still pressed
+    case LeftButton:        // after changing to this mode from Left
+    case RightButton:       // after changing to this mode from Right
+      break;
+    case UpButton:  
+      if(ButtonPressTime == 0)
+        { Settings.PeakHoldTime += 1; }
+      else
+        { Settings.PeakHoldTime += 1 * .001 * ButtonPressTime; }
+      break;
+    case DownButton:            
+      if(ButtonPressTime == 0)
+        { Settings.PeakHoldTime -= 1; }
+      else
+        { Settings.PeakHoldTime -= 1 * .001 * ButtonPressTime; }
+      break;
+  } // switch(ButtonPressed)
+
+  lcd.setCursor(0,0);
+  lcd.print("Peak Hold ms   ");
+  lcd.setCursor(0,1);
+  lcd.print( Settings.PeakHoldTime, 0 );
+  lcd.print("                ");  // finish out the line with blanks  
+}
+
+
 //***********************************************************************
 void ProcessPowerDisplay()
 {
@@ -826,7 +892,8 @@ void DisplayMachine()
     MeterScaleFwdControl,
     MeterScaleRevControl,
        MeterAvgTcControl,
-     MeterDecayTcControl
+     MeterDecayTcControl,
+     PeakHoldTimeControl
   };
   
   const char           FwdMode =  0;
@@ -839,10 +906,11 @@ void DisplayMachine()
   const char MeterScaleRevMode =  7;
   const char    MeterAvgTcMode =  8;
   const char  MeterDecayTcMode =  9;
+  const char  PeakHoldTimeMode = 10;
   
   static int ModeIndex    = 0;
    const int ModeIndexMin = 0;
-   const int ModeIndexMax = 9;
+   const int ModeIndexMax = 10;
 
   const int ControlTimeout = 5000; // timeout in 5 seconds
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
