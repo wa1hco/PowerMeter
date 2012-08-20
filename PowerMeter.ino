@@ -73,7 +73,6 @@ float Watts( float CouplerGainFwdDB, float Vol, float V );
 // Function prototypes used for building function pointer table
 void        FwdCalControl(int, int);
 void        RevCalControl(int, int);
-void     MeterModeControl(int, int);
 void     BacklightControl(int, int);
 void      FwdLimitControl(int, int);
 void      RevLimitControl(int, int);
@@ -167,7 +166,6 @@ struct settings_t
   float BacklightLevel;    // 0 to 100%
   float LimitRev;          // 0 to 300 Watts
   float LimitFwd;          // 0 to 2000 Watts
-  char  MeterModeIndex;    //  
   int   MeterTypeIndex;    // {Linear, Square Law}
   float MeterScaleFwd;     // 1 to 5000 Watts
   float MeterScaleRev;     // 1 to 5000 Watts
@@ -384,7 +382,6 @@ void DisplayLED()
 }
 
 //*******************************************************************
-// Settings.MeterMode: RAW, Peak Hang, Peak Fast, Average
 // Settings.MeterType: Power, SquareLaw, dBm
 // Settings.MeterScale Fwd, Rev: 1 to 5000W
 // Called at display update time
@@ -644,47 +641,6 @@ void RevLimitControl(int ButtonPressed, int ButtonPressTime)
 }
 
 //******************************************************************************
-void MeterModeControl(int ButtonPressed, int ButtonPressTime)
-{
-   const char MeterModes[5][16] = {"RAW",
-                                   "Peak Hang",
-                                   "Peak Fast",
-                                   "Average"};
-  // handle corrupt or unitialized EERPOM
-  const char  MeterModeIndexMin = 0;
-  const char  MeterModeIndexMax = 3;
-
-  // Check range, works for up/down, no button, EEPROM initialization
-  if( Settings.MeterModeIndex < MeterModeIndexMin ) 
-    { Settings.MeterModeIndex = MeterModeIndexMin; }      
-  if( Settings.MeterModeIndex > MeterModeIndexMax ) 
-    { Settings.MeterModeIndex = MeterModeIndexMax; }
-
-  if (ButtonPressTime == 0 )
-  {
-    switch (ButtonPressed)
-    {
-      case SelectButton:      // pressed to exit Select mode
-      case LeftButton:        // after changing to this mode from Left
-      case RightButton:       // after changing to this mode from Right
-        break;
-      case UpButton:     
-        Settings.MeterModeIndex += 1;
-        break;
-      case DownButton:   
-        Settings.MeterModeIndex -= 1;
-        break;
-    } // switch(ButtonPressed)
-  } // if(ButtonPressTime == 0)
-
-  lcd.setCursor(0,0);
-  lcd.print("Meter Dynamics  ");
-  lcd.setCursor(0,1);
-  lcd.print(MeterModes[Settings.MeterModeIndex]);
-  lcd.print("                ");  // finish out the line with blanks  
-}
-
-//******************************************************************************
 // Controls what type of marking ar on the meter
 //    Linear for regular volt/amp meter
 //    Square Law for Bird Watt Meter type scale
@@ -914,7 +870,6 @@ void DisplayMachine()
   { 
            FwdCalControl,
            RevCalControl,
-        MeterModeControl,
         BacklightControl,
          FwdLimitControl,
          RevLimitControl,
@@ -927,19 +882,18 @@ void DisplayMachine()
   
   const char           FwdMode =  0;
   const char           RevMode =  1;
-  const char         MeterMode =  2;
-  const char     BacklightMode =  3;
-  const char      FwdLimitMode =  4;
-  const char      RevLimitMode =  5;
-  const char     MeterTypeMode =  6;
-  const char MeterScaleFwdMode =  7;
-  const char MeterScaleRevMode =  8;
-  const char    MeterAvgTcMode =  9;
-  const char  MeterDecayTcMode = 10;
+  const char     BacklightMode =  2;
+  const char      FwdLimitMode =  3;
+  const char      RevLimitMode =  4;
+  const char     MeterTypeMode =  5;
+  const char MeterScaleFwdMode =  6;
+  const char MeterScaleRevMode =  7;
+  const char    MeterAvgTcMode =  8;
+  const char  MeterDecayTcMode =  9;
   
   static int ModeIndex    = 0;
    const int ModeIndexMin = 0;
-   const int ModeIndexMax = 10;
+   const int ModeIndexMax = 9;
 
   const int ControlTimeout = 5000; // timeout in 5 seconds
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
