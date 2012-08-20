@@ -71,14 +71,14 @@
 float Watts( float CouplerGainFwdDB, float Vol, float V );
 
 // Function prototypes used for building function pointer table
-void        FwdCalControl(int, int);
-void        RevCalControl(int, int);
-void     BacklightControl(int, int);
-void      FwdLimitControl(int, int);
-void      RevLimitControl(int, int);
-void     MeterTypeControl(int, int);
-void MeterScaleFwdControl(int, int);
-void MeterScaleRevControl(int, int);
+void        FwdCalControl(int, int);  // gain of coupler (negative)
+void        RevCalControl(int, int);  // gain of coupler (negative)
+void     BacklightControl(int, int);  // 0 to 100%
+void      FwdLimitControl(int, int);  // Watts, when to indicate
+void      RevLimitControl(int, int);  // Watts, when to indicate
+void     MeterTypeControl(int, int);  // Watts, dBm (not used, yet)
+void MeterScaleFwdControl(int, int);  // Max scale on bar graph
+void MeterScaleRevControl(int, int);  // Max scale on bar graph
 
 // Define SainSmart LCD 1602
 const int RowPerDisplay =  2;
@@ -93,15 +93,8 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);  // LCD1602
 // Digital:    0 1 2 3 4 5 6 7 8 9 10 11 12 13  // All Digital Pins
 // LCD:                4 5 6 7 8 9 10           // LCD I/F, Backlight on 10           
 // PWM:              3   5 6     9 10 11        // PWM capable pins
-// Meter:            3                11        // Meter drive
-// LED:        0 1                              // Fwd, Rev warning LED
-// Avail:          2                     12 13  // available
+// Avail:      0 1 2 3                11 12 13  // available
 
-// Digital Pins
-const int     MeterPinFwd =  3;  // PWM output to Forward meter
-const int     MeterPinRev = 11;  // PWM output to Reverse meter
-const int     LimitPinRev =  1;  // LED Output on high reflected power
-const int     LimitPinFwd =  0;  // LED Output on high peak power
 const int    BacklightPin = 10;  // high for backlight on
 
 // All the analog inputs have the same structure
@@ -159,6 +152,7 @@ float OffsetVoltRev;
 // Nonvolatile configuration settings
 // read on startup
 // used by EEPROM read, write routines restore, save settings
+// TODO: create a dBm display and bar graph
 struct settings_t
 {
   float CouplerGainFwdDB;  // -10 to -60 dB
@@ -166,7 +160,7 @@ struct settings_t
   float BacklightLevel;    // 0 to 100%
   float LimitRev;          // 0 to 300 Watts
   float LimitFwd;          // 0 to 2000 Watts
-  int   MeterTypeIndex;    // {Linear, Square Law}
+  int   MeterTypeIndex;    // {Watts, Square Law, dBm} (only Watts used, so far)
   float MeterScaleFwd;     // 1 to 5000 Watts
   float MeterScaleRev;     // 1 to 5000 Watts
   float MeterAvgTc;        // 0 to 1000 msec
@@ -198,22 +192,25 @@ void UpdateAnalogInputs(int DisplayTimeCounter)
   //    Probably should apply to meter
   //  Should Meter have difference transients from LCD numbers?
   //    Probably use peak hold more on numbers
+  
+  // computing the IIR filters on Fwd and Rev here in interrupt context
+  // able to have more time precision filtering ADC values
   if(PwrFwd.iAdc > PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)((1.0-fAdcUpCoef)*(float)PwrFwd.iAdcAvg+fAdcUpCoef*(float)PwrFwd.iAdc);
+      PwrFwd.iAdcAvg = (int)(PwrFwd.iAdc* +fAdcUpCoef + PwrFwd.iAdcAvg*(1.0-fAdcUpCoef));
     }
   else if(PwrFwd.iAdc < PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)((1.0-fAdcDecayCoef)*(float)PwrFwd.iAdcAvg+fAdcDecayCoef*(float)PwrFwd.iAdc);
+      PwrFwd.iAdcAvg = (int)(PwrFwd.iAdc* -fAdcDecayCoef + PwrFwd.iAdcAvg*(1.0-fAdcDecayCoef));
     }
   
   if(PwrRev.iAdc > PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)((1.0-fAdcUpCoef)*(float)PwrRev.iAdcAvg+fAdcUpCoef*(float)PwrRev.iAdc);
+      PwrRev.iAdcAvg = (int)(PwrRev.iAdc* +fAdcUpCoef + PwrRev.iAdcAvg*(1.0-fAdcUpCoef));
     }
   else if(PwrRev.iAdc < PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)((1.0-fAdcDecayCoef)*(float)PwrRev.iAdcAvg+fAdcDecayCoef*(float)PwrRev.iAdc);
+      PwrRev.iAdcAvg = (int)(PwrRev.iAdc* -fAdcDecayCoef + PwrRev.iAdcAvg*(1.0-fAdcDecayCoef));
     }
 } // UpdateAnalogInputs()
 
@@ -332,12 +329,14 @@ void drawbar (int StartCharLoc, int row, int ana)
 //------------------------------------------------------
 void DisplayPower() 
 {
-  CalculatePower();  // converts ADC values to Watts
+  CalculatePower();  // converts ADC values to Watts, Fwd and Rev
+  
   SmoothDisplay(&PwrFwd, PwrFwd.fWatts);
   lcd.setCursor(0,0);
   lcd.print("F ");
   sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
   lcd.print(LcdString);
+
   drawbar(6, 0, (int)(PwrFwd.fWatts/Settings.MeterScaleFwd * 1023));  
 
   SmoothDisplay(&PwrRev, PwrRev.fWatts);
@@ -345,41 +344,10 @@ void DisplayPower()
   lcd.print("R ");
   sprintf(LcdString, "%4d", (int) PwrRev.fWatts);
   lcd.print(LcdString);
+
   drawbar(6, 1, (int)(PwrRev.fWatts/Settings.MeterScaleRev * 1023));
+  
 } //Display Values
-
-
-//*****************************************************************
-// Drive the forward over power and reflected over power LEDs
-// also add a "*" to the display
-void DisplayLED()
-{
-  if( PwrFwd.fWatts > Settings.LimitFwd )
-    { 
-      digitalWrite(LimitPinFwd, HIGH); 
-//      lcd.setCursor(15,0);
-//      lcd.print("*");
-    }
-  else 
-    { 
-      digitalWrite(LimitPinFwd, LOW); 
-//      lcd.setCursor(15,0);
-//      lcd.print(" ");
-    }
-
-  if( PwrRev.fWatts > Settings.LimitRev )
-    { 
-      digitalWrite(LimitPinRev, HIGH); 
-//      lcd.setCursor(15,1);
-//      lcd.print("*");
-    }
-  else 
-    { 
-      digitalWrite(LimitPinRev, LOW); 
-//      lcd.setCursor(15,1);
-//      lcd.print(" ");
-    }
-}
 
 //*******************************************************************
 // Settings.MeterType: Power, SquareLaw, dBm
@@ -410,25 +378,8 @@ void DisplayLED()
 // Fo = Fs/(2*pi*a), a = Fs/(2*pi*Fo)   Frequency response
 // s[n] = 1-(1-(1/a))^n                 step response
 // a = N/2, for a moving average of N samples, IIR of a/2 works similarly
-void DisplayMeter() 
-{
-  int dBm;
-  int pwm;
-  
-  dBm = 10*log(PwrFwd.fWatts)+30.0;
-  pwm = (int) dBm * 4;
-  if (pwm <   0) pwm =   0;
-  if (pwm > 255) pwm = 255;
-  analogWrite(MeterPinFwd, pwm );
 
-  //PwrRev and PwrFwd .fWatts, convert to dBm
-  dBm = 10*log(PwrRev.fWatts)+30.0;
-  pwm = (int) dBm * 4;
-  if (pwm <   0) pwm =   0;
-  if (pwm > 255) pwm = 255;
-  analogWrite(MeterPinRev, pwm );
-}
-
+//******************************************************************************
 // monitor available, read command, output results
 //-----------------------------------------
 void serial()
@@ -532,7 +483,7 @@ void BacklightControl(int ButtonPressed, int ButtonPressTime)
   const int   BacklightLevelMin =   0;
   const int   BacklightLevelMax = 100;
 
-  // Check range, works for up/down, no button, EEPROM initialization
+  // Check range, works for up/down, no button, and EEPROM initialization
   if (Settings.BacklightLevel < BacklightLevelMin) 
     { Settings.BacklightLevel = BacklightLevelMin; }
   if (Settings.BacklightLevel > BacklightLevelMax) 
@@ -844,9 +795,7 @@ void MeterDecayTcControl(int ButtonPressed, int ButtonPressTime)
 //***********************************************************************
 void ProcessPowerDisplay()
 {
-  DisplayPower();      // LCD numbers, P.fwd and P.rev
-  DisplayMeter();      // PWM to meter or bar graph
-  DisplayLED();     
+  DisplayPower();      // LCD numbers, P.fwd and P.rev   
 }
 
 //******************************************************************************
@@ -1075,10 +1024,6 @@ void setup()
   const float AdcMaxVolts = 5.0;
   
   // Setup pin modes
-  pinMode( MeterPinFwd, OUTPUT);
-  pinMode( MeterPinRev, OUTPUT);
-  pinMode( LimitPinFwd, OUTPUT);
-  pinMode( LimitPinRev, OUTPUT);
   pinMode(BacklightPin, OUTPUT);
 
   // read and fill in the calibration Settings values
