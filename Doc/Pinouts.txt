@@ -1,0 +1,42 @@
+/*
+ * Power Meter for Dual Directional Coupler with LTC5507
+ 
+ * Copyright (c) 2012 jeff millar, wa1hco
+ * Distributed under the GNU GPL v2. For full terms see COPYING at the GNU website
+ */
+
+// LiquidCrystal(rs, enable, d4, d5, d6, d7) 
+// LCD 1602 also controls backlight on Pin 10
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);  // LCD1602
+
+// Available Digital Pins Map
+// Digital:    0 1 2 3 4 5 6 7 8 9 10 11 12 13  // All Digital Pins
+// LCD:                4 5 6 7 8 9 10           // LCD I/F, Backlight on 10           
+// PWM:              3   5 6     9 10 11        // PWM capable pins
+// Meter:            3                11        // Meter drive
+// LED:        0 1                              // Fwd, Rev warning LED
+// Avail:          2                     12 13  // available
+
+// Digital Pins
+const int     MeterPinFwd =  3;  // PWM output to Forward meter
+const int     MeterPinRev = 11;  // PWM output to Reverse meter
+const int     LimitPinRev =  1;  // LED Output on high reflected power
+const int     LimitPinFwd =  0;  // LED Output on high peak power
+const int    BacklightPin = 10;  // high for backlight on
+
+//*******************************************************************************
+// Configure the pins, set outputs to standby
+// Enable interrupts at the end
+
+  // Setup pin modes
+  pinMode( MeterPinFwd, OUTPUT);
+  pinMode( MeterPinRev, OUTPUT);
+  pinMode( LimitPinFwd, OUTPUT);
+  pinMode( LimitPinRev, OUTPUT);
+  pinMode(BacklightPin, OUTPUT);
+
+  // Button pin = A0 
+  PwrFwd.Pin = A1;  // input pin for forward Power
+  PwrRev.Pin = A2;  // input pin for reverse Power
+   
+
