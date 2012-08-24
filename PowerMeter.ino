@@ -109,7 +109,8 @@ struct analog_t
   volatile int   iAdcPeak;    // Peak for holding numerical display
            float fVolts;      // fCal * iAdc
            float fVoltsAvg;   // IIR filtered average
-           float fWatts;      // Power after curve fit
+           float fWattsBar;      // Power after curve fit
+           float fWattsNum;
            float fCal;        // Multipy by iAdc reading to give fVolts
            float DisplayNow;  // The value on the display at the moment
            int   DisplayTime; // Time elaspsed since last display change
@@ -165,9 +166,9 @@ struct settings_t
   int   MeterTypeIndex;    // {Watts, Square Law, dBm} (only Watts used, so far)
   float MeterScaleFwd;     // 1 to 5000 Watts
   float MeterScaleRev;     // 1 to 5000 Watts
-  float MeterAvgTc;        // 0 to 1000 msec
+  float   MeterAvgTc;      // 0 to 1000 msec
   float MeterDecayTc;      // 0 to 2000 msec
-  float LimitHoldTime;      // 0 to 1000 msec
+  float LimitHoldTime;     // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -219,7 +220,37 @@ void UpdateAnalogInputs()
       PwrRev.iAdcAvg = (int)(PwrRev.iAdc* -fAdcDecayCoef + PwrRev.iAdcAvg*(1.0-fAdcDecayCoef));
     }
   
+  static int NumberPeakTimer = 0;
+  if(PwrFwd.iAdc > PwrFwd.iAdcPeak)
+    {
+      PwrFwd.iAdcPeak = PwrFwd.iAdc;
+      NumberPeakTimer = 0;
+    }
+  else  // Peak Holding
+    {
+      NumberPeakTimer += TimeBetweenInterrupts;
+      if( NumberPeakTimer > Settings.LimitHoldTime) // Peak held long enough
+      {
+        PwrFwd.iAdcPeak = PwrFwd.iAdc;
+        NumberPeakTimer = Settings.LimitHoldTime;
+      }
+    }  
+   if(PwrRev.iAdc > PwrRev.iAdcPeak)
+    {
+      PwrRev.iAdcPeak = PwrRev.iAdc;
+      NumberPeakTimer = 0;
+    }
+  else  // Peak Holding
+    {
+      NumberPeakTimer += TimeBetweenInterrupts;
+      if( NumberPeakTimer > Settings.LimitHoldTime) // Peak held long enough
+      {
+        PwrRev.iAdcPeak = PwrRev.iAdc;
+        NumberPeakTimer = Settings.LimitHoldTime;
+      }
+    }    
   // if(iAdc > Limit) display '*' at char position 15  
+
 } // UpdateAnalogInputs()
 
 //*********************************************************************************
@@ -280,8 +311,7 @@ void CalculatePower()
   interrupts(); 
 
   PwrFwd.fVoltsAvg  = PwrFwd.fCal * iAdcLocalAvg;
-  
-  PwrFwd.fWatts = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsAvg - OffsetVoltFwd); 
+  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsAvg - OffsetVoltFwd); 
   
   // Mask interrupts to prevent reading while changing
   noInterrupts();
@@ -289,9 +319,17 @@ void CalculatePower()
   interrupts();
 
   PwrRev.fVoltsAvg  = PwrRev.fCal * iAdcLocalAvg;
+  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsAvg - OffsetVoltRev); 
   
-  PwrRev.fWatts = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsAvg - OffsetVoltRev); 
-}
+  // Calculate power for the Number Display, which had a peak hold function
+  noInterrupts();
+  PwrFwd.fVolts  = PwrFwd.fCal * PwrFwd.iAdcPeak;
+  PwrRev.fVolts  = PwrRev.fCal * PwrFwd.iAdcPeak;
+  interrupts(); 
+  
+  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVolts - OffsetVoltFwd); 
+  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVolts - OffsetVoltRev); 
+} // CalculatePower()
 
 //******************************************************************************
 // drawbar -- draw a bar on one row of the LCD
@@ -343,56 +381,25 @@ void DisplayPower()
   static int RevHoldTime = 0;
   
   // Forward: Numbers, Bar graph, Alert processing
-  CalculatePower();  // converts ADC values to Watts, Fwd and Rev
+  CalculatePower();  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
   
-  // TODO: Numbers based on
-  if(PwrFwd.fWatts > iWattsFwdPeak)
-    {
-      iWattsFwdPeak = PwrFwd.fWatts;
-      FwdHoldTime = 0;
-    }
-  else
-    {
-      FwdHoldTime += TimeBetweenDisplayUpdates;
-      if(FwdHoldTime > Settings.LimitHoldTime)
-        {
-          FwdHoldTime = Settings.LimitHoldTime;
-          iWattsFwdPeak = iWattsFwdPeak * (1-fAdcDecayCoef);
-        }
-    }
-  
-  SmoothDisplay(&PwrFwd, iWattsFwdPeak);
+  // SmoothDisplay(&PwrFwd, iWattsFwdPeak);
   lcd.setCursor(0,0);
   lcd.print("F ");
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
+  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
   lcd.print(LcdString);
 
-  drawbar(6, 0, (int)(PwrFwd.fWatts/Settings.MeterScaleFwd * 1023));  
+  drawbar(6, 0, (int)(PwrFwd.fWattsBar/Settings.MeterScaleFwd * 1023));  
 
-  // Reverse: Numbers, Bar graph, Alert processing
-  if(PwrRev.fWatts > iWattsRevPeak)
-    {
-      iWattsRevPeak = PwrRev.fWatts;
-      RevHoldTime = 0;
-    }
-  else
-    {
-      RevHoldTime += TimeBetweenDisplayUpdates;
-      if(RevHoldTime > Settings.LimitHoldTime)
-        {
-          RevHoldTime = Settings.LimitHoldTime;
-          iWattsRevPeak = iWattsRevPeak * (1-fAdcDecayCoef);
-        }
-    }
  
-  SmoothDisplay(&PwrRev, iWattsFwdPeak);
+  //SmoothDisplay(&PwrRev, iWattsRevPeak);
   
   lcd.setCursor(0,1);
   lcd.print("R ");
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
+  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
   lcd.print(LcdString);
 
-  drawbar(6, 1, (int)(PwrRev.fWatts/Settings.MeterScaleRev * 1023));
+  drawbar(6, 1, (int)(PwrRev.fWattsBar/Settings.MeterScaleRev * 1023));
   
 } //Display Values
 
@@ -477,7 +484,7 @@ void FwdCalControl(int ButtonPressed, int ButtonPressTime)
   lcd.setCursor(0,1);
   lcd.print("Fwd Pwr ");
   CalculatePower();
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
+  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
 }
@@ -517,7 +524,7 @@ void RevCalControl(int ButtonPressed, int ButtonPressTime)
   lcd.setCursor(0,1);
   lcd.print("Rev Pwr ");
   CalculatePower();
-  sprintf(LcdString, "%4d", (int) PwrRev.fWatts);
+  sprintf(LcdString, "%4d", (int) PwrRev.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
 }
@@ -861,23 +868,23 @@ void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:  
       if(ButtonPressTime == 0)
-        { Settings.LimitHoldTime += 1; }
+        { Settings.LimitHoldTime += 1.0; }
       else
-        { Settings.LimitHoldTime += 1 * .001 * ButtonPressTime; }
+        { Settings.LimitHoldTime += 1.0 * .001 * ButtonPressTime; }
       break;
     case DownButton:            
       if(ButtonPressTime == 0)
-        { Settings.LimitHoldTime -= 1; }
+        { Settings.LimitHoldTime -= 1.0; }
       else
-        { Settings.LimitHoldTime -= 1 * .001 * ButtonPressTime; }
+        { Settings.LimitHoldTime -= 1.0 * .001 * ButtonPressTime; }
       break;
   } // switch(ButtonPressed)
 
   lcd.setCursor(0,0);
-  lcd.print("Peak Hold ms   ");
+  lcd.print("Number Peak Hold");
   lcd.setCursor(0,1);
   lcd.print( Settings.LimitHoldTime, 0 );
-  lcd.print("                ");  // finish out the line with blanks  
+  lcd.print(" msec           ");  // finish out the line 
 }
 
 
@@ -941,7 +948,6 @@ void DisplayMachine()
    const int ModeIndexMin = 0;
    const int ModeIndexMax = 10;
 
-  const int ControlTimeout = 5000; // timeout in 5 seconds
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
   switch (DisplayState)  // Control mode or Power Mode
   {
@@ -949,11 +955,7 @@ void DisplayMachine()
       switch (ButtonPressed)
       {   
         case NoButton:
-          if (ButtonPressTime == ControlTimeout)
-          {
-            // Revert to Power display, erase control stuff from screen
-            DisplayState = PowerMode;
-          }
+          // 
           break;  // NoButton
 
         case SelectButton:
