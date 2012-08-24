@@ -79,7 +79,7 @@ void      RevLimitControl(int, int);  // Watts, when to indicate
 void     MeterTypeControl(int, int);  // Watts, dBm (not used, yet)
 void MeterScaleFwdControl(int, int);  // Max scale on bar graph
 void MeterScaleRevControl(int, int);  // Max scale on bar graph
-void  PeakHoldTimeControl(int, int);  //
+void  NumbersHoldTimeControl(int, int);  //
 
 // Define SainSmart LCD 1602
 const int RowPerDisplay =  2;
@@ -167,7 +167,7 @@ struct settings_t
   float MeterScaleRev;     // 1 to 5000 Watts
   float MeterAvgTc;        // 0 to 1000 msec
   float MeterDecayTc;      // 0 to 2000 msec
-  float PeakHoldTime;      // 0 to 1000 msec
+  float LimitHoldTime;      // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -219,23 +219,7 @@ void UpdateAnalogInputs()
       PwrRev.iAdcAvg = (int)(PwrRev.iAdc* -fAdcDecayCoef + PwrRev.iAdcAvg*(1.0-fAdcDecayCoef));
     }
   
-  // if(iAdc > Limit) display '*' at char position 15
-  
-  static int PeakTimer = 0;
-  if(PwrFwd.iAdc > PwrFwd.iAdcPeak)
-    {
-      PwrFwd.iAdcPeak = PwrFwd.iAdc;
-      PeakTimer = 0;
-    }
-  else
-    {
-      PeakTimer += TimeBetweenInterrupts;
-      if(PeakTimer > Settings.PeakHoldTime)
-        {
-           
-        }
-    }
-  
+  // if(iAdc > Limit) display '*' at char position 15  
 } // UpdateAnalogInputs()
 
 //*********************************************************************************
@@ -353,9 +337,31 @@ void drawbar (int StartCharLoc, int row, int ana)
 //------------------------------------------------------
 void DisplayPower() 
 {
+  static int iWattsFwdPeak = 0;
+  static int iWattsRevPeak = 0;
+  static int FwdHoldTime = 0;
+  static int RevHoldTime = 0;
+  
+  // Forward: Numbers, Bar graph, Alert processing
   CalculatePower();  // converts ADC values to Watts, Fwd and Rev
   
-  SmoothDisplay(&PwrFwd, PwrFwd.fWatts);
+  // TODO: Numbers based on
+  if(PwrFwd.fWatts > iWattsFwdPeak)
+    {
+      iWattsFwdPeak = PwrFwd.fWatts;
+      FwdHoldTime = 0;
+    }
+  else
+    {
+      FwdHoldTime += TimeBetweenDisplayUpdates;
+      if(FwdHoldTime > Settings.LimitHoldTime)
+        {
+          FwdHoldTime = Settings.LimitHoldTime;
+          iWattsFwdPeak = iWattsFwdPeak * (1-fAdcDecayCoef);
+        }
+    }
+  
+  SmoothDisplay(&PwrFwd, iWattsFwdPeak);
   lcd.setCursor(0,0);
   lcd.print("F ");
   sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
@@ -363,10 +369,27 @@ void DisplayPower()
 
   drawbar(6, 0, (int)(PwrFwd.fWatts/Settings.MeterScaleFwd * 1023));  
 
-  SmoothDisplay(&PwrRev, PwrRev.fWatts);
+  // Reverse: Numbers, Bar graph, Alert processing
+  if(PwrRev.fWatts > iWattsRevPeak)
+    {
+      iWattsRevPeak = PwrRev.fWatts;
+      RevHoldTime = 0;
+    }
+  else
+    {
+      RevHoldTime += TimeBetweenDisplayUpdates;
+      if(RevHoldTime > Settings.LimitHoldTime)
+        {
+          RevHoldTime = Settings.LimitHoldTime;
+          iWattsRevPeak = iWattsRevPeak * (1-fAdcDecayCoef);
+        }
+    }
+ 
+  SmoothDisplay(&PwrRev, iWattsFwdPeak);
+  
   lcd.setCursor(0,1);
   lcd.print("R ");
-  sprintf(LcdString, "%4d", (int) PwrRev.fWatts);
+  sprintf(LcdString, "%4d", (int) PwrFwd.fWatts);
   lcd.print(LcdString);
 
   drawbar(6, 1, (int)(PwrRev.fWatts/Settings.MeterScaleRev * 1023));
@@ -819,16 +842,16 @@ void MeterDecayTcControl(int ButtonPressed, int ButtonPressTime)
 //******************************************************************************
 // Define the Meter Decay Time Constand
 //
-void PeakHoldTimeControl(int ButtonPressed, int ButtonPressTime)
+void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
 {
-  const float PeakHoldTimeMin = 0.0;
-  const float PeakHoldTimeMax = 1000.0;  
+  const float LimitHoldTimeMin = 0.0;
+  const float LimitHoldTimeMax = 1000.0;  
   
   // Limit range to between Min and Max
-  if( Settings.PeakHoldTime < PeakHoldTimeMin ) 
-    { Settings.PeakHoldTime = PeakHoldTimeMin; }   
-  if( Settings.PeakHoldTime > PeakHoldTimeMax )
-    { Settings.PeakHoldTime = PeakHoldTimeMax; }
+  if( Settings.LimitHoldTime < LimitHoldTimeMin ) 
+    { Settings.LimitHoldTime = LimitHoldTimeMin; }   
+  if( Settings.LimitHoldTime > LimitHoldTimeMax )
+    { Settings.LimitHoldTime = LimitHoldTimeMax; }
 
   switch (ButtonPressed)
   {
@@ -838,22 +861,22 @@ void PeakHoldTimeControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:  
       if(ButtonPressTime == 0)
-        { Settings.PeakHoldTime += 1; }
+        { Settings.LimitHoldTime += 1; }
       else
-        { Settings.PeakHoldTime += 1 * .001 * ButtonPressTime; }
+        { Settings.LimitHoldTime += 1 * .001 * ButtonPressTime; }
       break;
     case DownButton:            
       if(ButtonPressTime == 0)
-        { Settings.PeakHoldTime -= 1; }
+        { Settings.LimitHoldTime -= 1; }
       else
-        { Settings.PeakHoldTime -= 1 * .001 * ButtonPressTime; }
+        { Settings.LimitHoldTime -= 1 * .001 * ButtonPressTime; }
       break;
   } // switch(ButtonPressed)
 
   lcd.setCursor(0,0);
   lcd.print("Peak Hold ms   ");
   lcd.setCursor(0,1);
-  lcd.print( Settings.PeakHoldTime, 0 );
+  lcd.print( Settings.LimitHoldTime, 0 );
   lcd.print("                ");  // finish out the line with blanks  
 }
 
@@ -868,6 +891,12 @@ void ProcessPowerDisplay()
 // state machine, Entered at timed intervals
 // switch on Control vs Power Display mode
 // Select button change between Control and Power mode
+//   Power Mode: Select Pressed
+//     ButtonPressTime == 0: Switch to Control on press, Display Settings
+//     ButtonPressTime > 0; Continue to display "Settings"
+//   Control Mode: Select Pressed
+//     ButtonPressTime == 0: Switch to Power mode
+//   Control Mode: Select switches to Power mode on press, holding press causes write to EEPROM
 // Left and Right buttons change the control mode
 // Up and Down handled in the Control routines
 // then call ProcessControlMode(ModeIndex) which branches to control routines
@@ -883,30 +912,30 @@ void DisplayMachine()
   // build an array of control routine pointers.
   fControlPtr fControl[11] = 
   { 
-           FwdCalControl,
-           RevCalControl,
-        BacklightControl,
-         FwdLimitControl,
-         RevLimitControl,
-        MeterTypeControl,
-    MeterScaleFwdControl,
-    MeterScaleRevControl,
-       MeterAvgTcControl,
-     MeterDecayTcControl,
-     PeakHoldTimeControl
+              FwdCalControl,
+              RevCalControl,
+           BacklightControl,
+            FwdLimitControl,
+            RevLimitControl,
+           MeterTypeControl,
+       MeterScaleFwdControl,
+       MeterScaleRevControl,
+          MeterAvgTcControl,
+        MeterDecayTcControl,
+     NumbersHoldTimeControl
   };
   
-  const char           FwdMode =  0;
-  const char           RevMode =  1;
-  const char     BacklightMode =  2;
-  const char      FwdLimitMode =  3;
-  const char      RevLimitMode =  4;
-  const char     MeterTypeMode =  5;
-  const char MeterScaleFwdMode =  6;
-  const char MeterScaleRevMode =  7;
-  const char    MeterAvgTcMode =  8;
-  const char  MeterDecayTcMode =  9;
-  const char  PeakHoldTimeMode = 10;
+  const char             FwdMode =  0;
+  const char             RevMode =  1;
+  const char       BacklightMode =  2;
+  const char        FwdLimitMode =  3;
+  const char        RevLimitMode =  4;
+  const char       MeterTypeMode =  5;
+  const char   MeterScaleFwdMode =  6;
+  const char   MeterScaleRevMode =  7;
+  const char      MeterAvgTcMode =  8;
+  const char    MeterDecayTcMode =  9;
+  const char NumbersHoldTimeMode = 10;
   
   static int ModeIndex    = 0;
    const int ModeIndexMin = 0;
