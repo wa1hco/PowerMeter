@@ -165,7 +165,7 @@ struct settings_t
   int   BarTypeIndex;    // {Watts, Square Law, dBm} (only Watts used, so far)
   float BarScaleFwd;     // 1 to 5000 Watts
   float BarScaleRev;     // 1 to 5000 Watts
-  float   BarAvgTc;      // 0 to 1000 msec
+  float BarAvgTc;      // 0 to 1000 msec
   float BarDecayTc;      // 0 to 2000 msec
   float LimitHoldTime;     // 0 to 1000 msec
 } Settings;  
