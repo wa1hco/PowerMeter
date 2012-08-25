@@ -887,7 +887,6 @@ void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
   lcd.print(" msec           ");  // finish out the line 
 }
 
-
 //***********************************************************************
 void ProcessPowerDisplay()
 {
@@ -913,6 +912,8 @@ void DisplayMachine()
   enum state_t 
   { PowerMode, ControlMode };
   static state_t DisplayState = PowerMode;
+  
+  static int EepromHoldTimer = 0;
   
   // define type for a pointer to a control function
   typedef void (*fControlPtr)(int, int);
@@ -949,87 +950,132 @@ void DisplayMachine()
    const int ModeIndexMax = 10;
 
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
-  switch (DisplayState)  // Control mode or Power Mode
+  
+  if(ButtonPressed == SelectButton)
   {
-    case ControlMode:  
-      switch (ButtonPressed)
-      {   
-        case NoButton:
-          // 
-          break;  // NoButton
-
-        case SelectButton:
-          // arrive here in two conditions
-          //    Button just pressed, time=0, change state
-          if (ButtonPressTime == 0)   // on leading edge of button press
-          {
-            // user selects end, write to EEPROM
-            eeprom_write_block((const void*)&Settings, (void*)0, sizeof(Settings));
-            DisplayState = PowerMode;
-          }
-          break;  // SelectButton
-       
-        case LeftButton:
-          if (ButtonPressTime == 0)    // On leading edge of button press
-          {
-            // previous control mode, wrap around
-            if (ModeIndex > ModeIndexMin) { ModeIndex -= 1; }  
-            else if (ModeIndex <= ModeIndexMin) { ModeIndex = ModeIndexMax; }       
-          }
-          break;  // LeftButton
-
-        case RightButton:
-          if (ButtonPressTime == 0)    // On leading edge of button press
-          {
-            // next control mode, wrap around
-            if (ModeIndex < ModeIndexMax) { ModeIndex += 1; }  // next control mode
-            else if (ModeIndex >= ModeIndexMax) { ModeIndex = ModeIndexMin; }          
-          }
-          break;  // RightButton
-
-        case UpButton:
-        case DownButton:    
-          // handled in ProcessCurrentMode()    
-          break; 
-      }  // switch(ButtonPressed)
-      
-      // Call Control routine using the function point array      
-      (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);  
-      break;  // ControlMode
-
-    case PowerMode:
-      switch (ButtonPressed)
+    If(DisplayState == ControlMode)
+    {
+      if(ButtonPressTime == 0)
       {
-        // all buttons but Select just continue to update display
-        case LeftButton:   
-        case RightButton:   
-        case UpButton:      
-        case DownButton: 
-        case NoButton:
-          ProcessPowerDisplay();
-          break;
+        DisplayState = PowerMode;
+        lcd.setCursor(0,0);
+        lcd.print("Hold to Set     ");
+      }
+      else // Button held from PowerMode
+      {
+        // Message about control mode still on screen
+      }
+    }
+    else // PowerMode in PowerMode
+    {
+      if(ButtonPressTime == 0)
+      {
+        // switch to control mode
+        DisplayState = ControlMode;
+        lcd.setCursor(0,0);
+        lcd.print("Control Mode    ");
+        lcd.setCursor(0,1);
+        lcd.print("                ");
+      }
+      else  // Button held from Control mode
+      {
+        //  Button still held from Control Mode
+        if(EepromHoldTimer <= 0)
+        {
+          EepromHoldTimer = 0;
+          eeprom_write_block((const void*)&Settings, (void*)0, sizeof(Settings));
+          BlankDisplay();
+          lcd.print('EEPROM Writen   ");
+        }
+        else
+        {
+          EepromHoldTimer -= TimeBetweenDisplayUpdates;
+          lcd.setCursor(0,1);
+          lcd.print("Set in ");
+          lcd.print(EepromHoldTimer)
+          lcd.print(" sec        ");
+        }
+      }
+    }
+  }
+  
+  if(DisplayState == ControlMode)  // Control mode or Power Mode
+  {
+    switch (ButtonPressed)
+    {   
+      case NoButton:
+        // 
+        break;  // NoButton
 
-        case SelectButton:
-          // return to power mode
-          if (ButtonPressTime == 0)
-          {
-            DisplayState = ControlMode;
-            
-            // Call Control routine using the function point array
-            (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);        
-          }
-          else
-          {
-            // Here if holding down Select after pressing in Control mode
-            ProcessPowerDisplay();
-          }
-          break;
-      } // switch(ButtonPressed)
-      break; // PowerMode
-    default: 
-      { }
-    } // switch (DisplayState)
-  } // StateMachine()
+      case SelectButton:
+        // arrive here in two conditions
+        //    Button just pressed, time=0, change state
+        if (ButtonPressTime == 0)   // on leading edge of button press
+        {
+          // user selects end, write to EEPROM
+          eeprom_write_block((const void*)&Settings, (void*)0, sizeof(Settings));
+
+        }
+        break;  // SelectButton
+     
+      case LeftButton:
+        if (ButtonPressTime == 0)    // On leading edge of button press
+        {
+          // previous control mode, wrap around
+          if (ModeIndex > ModeIndexMin) { ModeIndex -= 1; }  
+          else if (ModeIndex <= ModeIndexMin) { ModeIndex = ModeIndexMax; }       
+        }
+        break;  // LeftButton
+
+      case RightButton:
+        if (ButtonPressTime == 0)    // On leading edge of button press
+        {
+          // next control mode, wrap around
+          if (ModeIndex < ModeIndexMax) { ModeIndex += 1; }  // next control mode
+          else if (ModeIndex >= ModeIndexMax) { ModeIndex = ModeIndexMin; }          
+        }
+        break;  // RightButton
+
+      case UpButton:
+      case DownButton:    
+        // handled in ProcessCurrentMode()    
+        break; 
+    }  // switch(ButtonPressed)
+  
+    // Call Control routine using the function point array      
+    (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);  
+  } // if(ControlMode)
+  else  // PowerMode
+  {
+    switch (ButtonPressed)
+    {
+      // all buttons but Select just continue to update display
+      case LeftButton:   
+      case RightButton:   
+      case UpButton:      
+      case DownButton: 
+      case NoButton:
+        ProcessPowerDisplay();
+        break;
+
+      case SelectButton:
+        // return to power mode
+        if (ButtonPressTime == 0)
+        {
+          DisplayState = ControlMode;
+          
+          // Call Control routine using the function point array
+          (*fControl[ModeIndex])(ButtonPressed, ButtonPressTime);        
+        }
+        else
+        {
+          // Here if holding down Select after pressing in Control mode
+          ProcessPowerDisplay();
+        }
+        break;
+    } // switch(ButtonPressed)
+  } // else(PowerMode)
+} // DisplayMachine()
 
 //*************************************************************************
 // Called at TimeBetweenDisplayUpdates intervals (50 ms)
