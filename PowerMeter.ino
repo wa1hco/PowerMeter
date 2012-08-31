@@ -54,17 +54,14 @@
 //  0  Fwd Cplr -40.0dB
 //  1  Pwr Fwd 200W  
 
-// TODO:
-//    change coupler values from neg gain to pos loss????
-//    Check timing of 2 ms IRQ and 50 ms Display update
-//    Move Control, Power Mode enum into DisplayMachine, needs to initialize enum
-
 // include the library code:
 #include           <math.h>
 #include  <LiquidCrystal.h>
 #include  <avr/interrupt.h>
 #include       <MsTimer2.h>
 #include     <avr/eeprom.h>
+
+//#define DEBUG
 
 // Function Prototypes
 // Prototpye for external Watts function written by Matlab
@@ -107,6 +104,7 @@ struct analog_t
   volatile int   iAdcAvg;     // Average value per time constant
   volatile int   iAdcPeak;    // Peak for holding numerical display
            float fVolts;      // fCal * iAdc
+           float fVoltsPeak;  // fCal * iAdcPeak
            float fVoltsAvg;   // IIR filtered average
            float fWattsBar;      // Power after curve fit
            float fWattsNum;
@@ -154,7 +152,6 @@ float OffsetVoltRev;
 // Nonvolatile configuration settings
 // read on startup
 // used by EEPROM read, write routines restore, save settings
-// TODO: create a dBm display and bar graph
 struct settings_t
 {
   float CouplerGainFwdDB;  // -10 to -60 dB
@@ -162,11 +159,11 @@ struct settings_t
   float BacklightLevel;    // 0 to 100%
   float LimitRev;          // 0 to 300 Watts
   float LimitFwd;          // 0 to 2000 Watts
-  int   BarTypeIndex;    // {Watts, Square Law, dBm} (only Watts used, so far)
-  float BarScaleFwd;     // 1 to 5000 Watts
-  float BarScaleRev;     // 1 to 5000 Watts
-  float BarAvgTc;      // 0 to 1000 msec
-  float BarDecayTc;      // 0 to 2000 msec
+  int   BarTypeIndex;      // {Watts, Square Law, dBm} (only Watts used, so far)
+  float BarScaleFwd;       // 1 to 5000 Watts
+  float BarScaleRev;       // 1 to 5000 Watts
+  float BarAvgTc;          // 0 to 1000 msec
+  float BarDecayTc;        // 0 to 2000 msec
   float LimitHoldTime;     // 0 to 1000 msec
 } Settings;  
 
@@ -186,9 +183,11 @@ void UpdateAnalogInputs()
   PwrFwd.iAdc = analogRead(PwrFwd.Pin); // read the raw ADC value 
   PwrRev.iAdc = analogRead(PwrRev.Pin); // read the raw ADC value 
   
+#ifdef DEBUG
   // Create a test input
   PwrFwd. iAdc = 0x3ff & (int) millis() >> 3 ;
   PwrRev. iAdc = 0x3ff & (int) millis() >> 3 ;
+#endif
 
   // IIR filter (1-a) * history + a * new
   // a = 1/(TC / IRQ interval), calculated on Tc change, 
@@ -297,40 +296,31 @@ void SmoothDisplay(struct analog_t *sig, float value)
 //  reads current peak power from ADC and writes Watts
 void CalculatePower()
 {
-  volatile int iAdcLocalAvg;  // written by ISR, read in background
-  
-  // PwrFwd  Power forward
+  // iAdcAvg smooth with fast attack, slow decay, make access to iAdcAvg atomic
   noInterrupts();
-  iAdcLocalAvg  = PwrFwd.iAdcAvg;
+  PwrFwd.fVoltsAvg  = PwrFwd.fCal * PwrFwd.iAdcAvg;
+  PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
   interrupts(); 
 
-  PwrFwd.fVoltsAvg  = PwrFwd.fCal * iAdcLocalAvg;
   PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsAvg - OffsetVoltFwd); 
-  
-  // Mask interrupts to prevent reading while changing
-  noInterrupts();
-  iAdcLocalAvg  = PwrRev.iAdcAvg; 
-  interrupts();
-
-  PwrRev.fVoltsAvg  = PwrRev.fCal * iAdcLocalAvg;
   PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsAvg - OffsetVoltRev); 
   
-  // Calculate power for the Number Display, which had a peak hold function
+  // Calculate power for the Number Display, which has a peak hold function
   noInterrupts();
-  PwrFwd.fVolts  = PwrFwd.fCal * PwrFwd.iAdcPeak;
-  PwrRev.fVolts  = PwrRev.fCal * PwrFwd.iAdcPeak;
+  PwrFwd.fVoltsPeak  = PwrFwd.fCal * PwrFwd.iAdcPeak;
+  PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
   interrupts(); 
   
-  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVolts - OffsetVoltFwd); 
-  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVolts - OffsetVoltRev); 
+  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsPeak - OffsetVoltFwd); 
+  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsPeak - OffsetVoltRev); 
 } // CalculatePower()
 
 //******************************************************************************
-// drawbar -- draw a bar on one row of the LCD
+// DrawBar -- draw a bar on one row of the LCD
 //   Place, starting point for bar gragh
 //   row, row location for bar graph
 //   ana, analog value on scale 0 to 1023
-void drawbar (int StartCharLoc, int row, int ana)
+void DrawBar (int StartCharLoc, int row, int ana)
 {
   int bar;    // in columns, inlcude  blank column between characters
   int i;
@@ -360,7 +350,7 @@ void drawbar (int StartCharLoc, int row, int ana)
 
 //**********************************************************************
 // Display power
-// This called from background, not ISR
+// This called from background
 // Convert to floating point, calibrate, display
 // Manage peak hold and smoothing update rates
 // converting ADC int to calibrated float takes 60 usec
@@ -377,23 +367,19 @@ void DisplayPower()
   // Forward: Numbers, Bar graph, Alert processing
   CalculatePower();  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
   
-  // SmoothDisplay(&PwrFwd, iWattsFwdPeak);
   lcd.setCursor(0,0);
   lcd.print("F ");
   sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
   lcd.print(LcdString);
 
-  drawbar(6, 0, (int)(PwrFwd.fWattsBar/Settings.BarScaleFwd * 1023));  
+  DrawBar(6, 0, (int)(PwrFwd.fWattsBar/Settings.BarScaleFwd * 1023));  
 
- 
-  //SmoothDisplay(&PwrRev, iWattsRevPeak);
-  
   lcd.setCursor(0,1);
   lcd.print("R ");
   sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
   lcd.print(LcdString);
 
-  drawbar(6, 1, (int)(PwrRev.fWattsBar/Settings.BarScaleRev * 1023));
+  DrawBar(6, 1, (int)(PwrRev.fWattsBar/Settings.BarScaleRev * 1023));
   
 } //Display Values
 
@@ -1145,9 +1131,11 @@ void setup()
   OffsetVoltFwd = PwrFwd.fVolts;
   OffsetVoltRev = PwrRev.fVolts;
 
+ #ifdef DEBUG
   // for debug purposes
   OffsetVoltFwd = 0.6;
   OffsetVoltRev = 0.6;
+ #endif
  
   // The serial port 
   Serial.begin(57600);
