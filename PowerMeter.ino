@@ -99,18 +99,19 @@ const int BacklightPin = 10;  // high for backlight on
 // volatile because shared between interrupt and background display context
 struct analog_t 
 {
-           int   Pin;         // Arduino pin number
-  volatile int   iAdc;        // ADC output in count from 0 to AdcMaxCount
-  volatile int   iAdcAvg;     // Average value per time constant
-  volatile int   iAdcPeak;    // Peak for holding numerical display
-           float fVolts;      // fCal * iAdc
-           float fVoltsPeak;  // fCal * iAdcPeak
-           float fVoltsAvg;   // IIR filtered average
-           float fWattsBar;      // Power after curve fit
-           float fWattsNum;
-           float fCal;        // Multipy by iAdc reading to give fVolts
-           float DisplayNow;  // The value on the display at the moment
-           int   DisplayTime; // Time elaspsed since last display change
+           int   Pin;          // Arduino pin number
+  volatile int   iAdc;         // ADC output in count from 0 to AdcMaxCount
+  volatile int   iAdcAvg;      // Average value per time constant
+  volatile int   iAdcPeak;     // Peak for holding numerical display
+           float fVolts;       // fCal * iAdc
+           float fVoltsOffset; // Volts offset at no power, about 0.6 Volts
+           float fVoltsPeak;   // fCal * iAdcPeak
+           float fVoltsAvg;    // IIR filtered average
+           float fWattsBar;    // Power after curve fit
+           float fWattsNum;    // Watts displayed as a number
+           float fCal;         // Multipy by iAdc reading to give fVolts
+           float DisplayNow;   // The value on the display at the moment
+           int   DisplayTime;  // Time elaspsed since last display change
 };
 
 // Bar dynamics...operates on Watts
@@ -144,10 +145,6 @@ int IsrTime =  0;  // test variable, ISR execution time in msec
 
 // Flag set at TimeBetweenDisplayUpdates by ISR, read by loop()
 boolean DisplayFlag = false; 
-
-// define the LTC5507 offsets, measured at setup, used in curve fit
-float OffsetVoltFwd;
-float OffsetVoltRev;
 
 // Nonvolatile configuration settings
 // read on startup
@@ -302,8 +299,8 @@ void CalculatePower()
   PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
   interrupts(); 
 
-  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsAvg - OffsetVoltFwd); 
-  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsAvg - OffsetVoltRev); 
+  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg - PwrFwd.fVoltsOffset); 
+  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg - PwrRev.fVoltsOffset); 
   
   // Calculate power for the Number Display, which has a peak hold function
   noInterrupts();
@@ -311,8 +308,8 @@ void CalculatePower()
   PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
   interrupts(); 
   
-  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, OffsetVoltFwd, PwrFwd.fVoltsPeak - OffsetVoltFwd); 
-  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, OffsetVoltRev, PwrRev.fVoltsPeak - OffsetVoltRev); 
+  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak - PwrFwd.fVoltsOffset); 
+  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak - PwrRev.fVoltsOffset); 
 } // CalculatePower()
 
 //******************************************************************************
@@ -417,7 +414,26 @@ void DisplayPower()
 //-----------------------------------------
 void serial()
 {
-  
+  Serial.print(PwrFwd.iAdc);
+  Serial.print(" ");
+  Serial.print(PwrRev.iAdc);
+  Serial.print(" ");
+  Serial.print(PwrFwd.iAdcAvg);
+  Serial.print(" ");
+  Serial.print(PwrRev.iAdcAvg);
+  Serial.print(" ");
+  Serial.print(PwrFwd.iAdcPeak);
+  Serial.print(" ");
+  Serial.print(PwrRev.iAdcPeak);
+  Serial.print("  ");
+  Serial.print(PwrFwd.fVoltsAvg,6);
+  Serial.print(" ");
+  Serial.print(PwrRev.fVoltsAvg,6);
+  Serial.print(" ");
+  Serial.print(PwrFwd.fVoltsOffset,6);
+  Serial.print(" ");
+  Serial.print(PwrRev.fVoltsOffset,6);
+  Serial.print("\n");
 }
 
 //******************************************************************************
@@ -1119,8 +1135,8 @@ void setup()
   PwrRev.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
 
   // Read Forward and Reverse ADC values, assuming no RF to set Vol
-  PwrFwd.fVolts = PwrFwd.fCal * analogRead(PwrFwd.iAdc);
-  PwrRev.fVolts = PwrRev.fCal * analogRead(PwrRev.iAdc);
+  PwrFwd.fVolts = PwrFwd.fCal * analogRead(PwrFwd.Pin);
+  PwrRev.fVolts = PwrRev.fCal * analogRead(PwrRev.Pin);
   
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
@@ -1128,13 +1144,13 @@ void setup()
   fAdcUpCoef    = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
   fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
 
-  OffsetVoltFwd = PwrFwd.fVolts;
-  OffsetVoltRev = PwrRev.fVolts;
+  PwrFwd.fVoltsOffset = PwrFwd.fVolts;
+  PwrRev.fVoltsOffset = PwrRev.fVolts;
 
  #ifdef DEBUG
   // for debug purposes
-  OffsetVoltFwd = 0.6;
-  OffsetVoltRev = 0.6;
+  PwrFwd.fVoltsOffset = 0.6;
+  PwrRev.fVoltsOffset = 0.6;
  #endif
  
   // The serial port 
@@ -1165,5 +1181,8 @@ void loop()
     DisplayFlag = false;  // clear the flag
     DisplayTime = micros();
     DisplayMachine();     // state machine based on ButtonPressed
+    
+    serial();
+    
   }
 }
