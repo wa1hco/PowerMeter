@@ -65,7 +65,7 @@
 
 // Function Prototypes
 // Prototpye for external Watts function written by Matlab
-float Watts( float CouplerGainFwdDB, float Vol, float V );
+float Watts( float CouplerGainFwdDB, float Vol, float Vo );
 
 // Function prototypes used for building function pointer table
 void          FwdCalControl(int, int);  // gain of coupler (negative)
@@ -161,7 +161,7 @@ struct settings_t
   float BarScaleRev;       // 1 to 5000 Watts
   float BarAvgTc;          // 0 to 1000 msec
   float BarDecayTc;        // 0 to 2000 msec
-  float LimitHoldTime;     // 0 to 1000 msec
+  float NumberHoldTime;     // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -182,8 +182,8 @@ void UpdateAnalogInputs()
   
 #ifdef DEBUG
   // Create a test input
-  PwrFwd. iAdc = 0x3ff & (int) millis() >> 3 ;
-  PwrRev. iAdc = 0x3ff & (int) millis() >> 3 ;
+  PwrFwd.iAdc = 0x3ff & (int) millis() >> 3 ;
+  PwrRev.iAdc = 0x3ff & (int) millis() >> 3 ;
 #endif
 
   // IIR filter (1-a) * history + a * new
@@ -192,22 +192,24 @@ void UpdateAnalogInputs()
   
   // computing the IIR filters on Fwd and Rev here in interrupt context
   // able to have more time precision filtering ADC values
+  
+ 
   if(PwrFwd.iAdc > PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)(PwrFwd.iAdc* +fAdcUpCoef + PwrFwd.iAdcAvg*(1.0-fAdcUpCoef));
+      PwrFwd.iAdcAvg = (int)( (float)PwrFwd.iAdc * +fAdcUpCoef   + (float)PwrFwd.iAdcAvg * (1.0-fAdcUpCoef) );
     }
   else if(PwrFwd.iAdc < PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)(PwrFwd.iAdc* -fAdcDecayCoef + PwrFwd.iAdcAvg*(1.0-fAdcDecayCoef));
+      PwrFwd.iAdcAvg = (int)( (float)PwrFwd.iAdc * -fAdcDecayCoef + (float)PwrFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
     }
   
   if(PwrRev.iAdc > PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)(PwrRev.iAdc* +fAdcUpCoef + PwrRev.iAdcAvg*(1.0-fAdcUpCoef));
+      PwrRev.iAdcAvg = (int)(PwrRev.iAdc * +fAdcUpCoef + PwrRev.iAdcAvg * (1.0-fAdcUpCoef));
     }
   else if(PwrRev.iAdc < PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)(PwrRev.iAdc* -fAdcDecayCoef + PwrRev.iAdcAvg*(1.0-fAdcDecayCoef));
+      PwrRev.iAdcAvg = (int)(PwrRev.iAdc * -fAdcDecayCoef + PwrRev.iAdcAvg * (1.0-fAdcDecayCoef));
     }
   
   static int NumberPeakTimer = 0;
@@ -219,10 +221,10 @@ void UpdateAnalogInputs()
   else  // Peak Holding
     {
       NumberPeakTimer += TimeBetweenInterrupts;
-      if( NumberPeakTimer > Settings.LimitHoldTime) // Peak held long enough
+      if( NumberPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
         PwrFwd.iAdcPeak = PwrFwd.iAdc;
-        NumberPeakTimer = Settings.LimitHoldTime;
+        NumberPeakTimer = Settings.NumberHoldTime;
       }
     }  
    if(PwrRev.iAdc > PwrRev.iAdcPeak)
@@ -233,14 +235,12 @@ void UpdateAnalogInputs()
   else  // Peak Holding
     {
       NumberPeakTimer += TimeBetweenInterrupts;
-      if( NumberPeakTimer > Settings.LimitHoldTime) // Peak held long enough
+      if( NumberPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
         PwrRev.iAdcPeak = PwrRev.iAdc;
-        NumberPeakTimer = Settings.LimitHoldTime;
+        NumberPeakTimer = Settings.NumberHoldTime;
       }
     }    
-  // if(iAdc > Limit) display '*' at char position 15  
-
 } // UpdateAnalogInputs()
 
 //*********************************************************************************
@@ -299,8 +299,8 @@ void CalculatePower()
   PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
   interrupts(); 
 
-  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg - PwrFwd.fVoltsOffset); 
-  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg - PwrRev.fVoltsOffset); 
+  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg); 
+  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg); 
   
   // Calculate power for the Number Display, which has a peak hold function
   noInterrupts();
@@ -308,8 +308,8 @@ void CalculatePower()
   PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
   interrupts(); 
   
-  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak - PwrFwd.fVoltsOffset); 
-  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak - PwrRev.fVoltsOffset); 
+  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak); 
+  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak); 
 } // CalculatePower()
 
 //******************************************************************************
@@ -373,7 +373,7 @@ void DisplayPower()
 
   lcd.setCursor(0,1);
   lcd.print("R ");
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
+  sprintf(LcdString, "%4d", (int) PwrRev.fWattsNum);
   lcd.print(LcdString);
 
   DrawBar(6, 1, (int)(PwrRev.fWattsBar/Settings.BarScaleRev * 1023));
@@ -414,26 +414,25 @@ void DisplayPower()
 //-----------------------------------------
 void serial()
 {
+//#ifdef DEBUG
   Serial.print(PwrFwd.iAdc);
-  Serial.print(" ");
-  Serial.print(PwrRev.iAdc);
   Serial.print(" ");
   Serial.print(PwrFwd.iAdcAvg);
   Serial.print(" ");
-  Serial.print(PwrRev.iAdcAvg);
-  Serial.print(" ");
   Serial.print(PwrFwd.iAdcPeak);
-  Serial.print(" ");
-  Serial.print(PwrRev.iAdcPeak);
   Serial.print("  ");
   Serial.print(PwrFwd.fVoltsAvg,6);
+  Serial.print("  ");
+  Serial.print(PwrFwd.fWattsBar,6);
   Serial.print(" ");
-  Serial.print(PwrRev.fVoltsAvg,6);
-  Serial.print(" ");
-  Serial.print(PwrFwd.fVoltsOffset,6);
-  Serial.print(" ");
-  Serial.print(PwrRev.fVoltsOffset,6);
+  Serial.print(PwrFwd.fVoltsAvg - PwrFwd.fVoltsOffset,6);
+  Serial.print("  ");
+  Serial.print(fAdcUpCoef,6);
+  Serial.print("  ");
+  Serial.print(fAdcDecayCoef,6);
   Serial.print("\n");
+//#endif
+
 }
 
 //******************************************************************************
@@ -709,7 +708,7 @@ void BarScaleRevControl(int ButtonPressed, int ButtonPressTime)
 }
 
 //******************************************************************************
-// Define the Bar Averaging Time Constant
+// Define the Bar Averaging Time Constant (msec)
 void BarAvgTcControl(int ButtonPressed, int ButtonPressTime)
 {
   const float BarAvgTcMin =    1.0;
@@ -804,14 +803,14 @@ void BarDecayTcControl(int ButtonPressed, int ButtonPressTime)
 //
 void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
 {
-  const float LimitHoldTimeMin = 0.0;
-  const float LimitHoldTimeMax = 1000.0;  
+  const float NumberHoldTimeMin = 0.0;
+  const float NumberHoldTimeMax = 1000.0;  
   
   // Limit range to between Min and Max
-  if( Settings.LimitHoldTime < LimitHoldTimeMin ) 
-    { Settings.LimitHoldTime = LimitHoldTimeMin; }   
-  if( Settings.LimitHoldTime > LimitHoldTimeMax )
-    { Settings.LimitHoldTime = LimitHoldTimeMax; }
+  if( Settings.NumberHoldTime < NumberHoldTimeMin ) 
+    { Settings.NumberHoldTime = NumberHoldTimeMin; }   
+  if( Settings.NumberHoldTime > NumberHoldTimeMax )
+    { Settings.NumberHoldTime = NumberHoldTimeMax; }
 
   switch (ButtonPressed)
   {
@@ -821,22 +820,22 @@ void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
       break;
     case UpButton:  
       if(ButtonPressTime == 0)
-        { Settings.LimitHoldTime += 1.0; }
+        { Settings.NumberHoldTime += 1.0; }
       else
-        { Settings.LimitHoldTime += 1.0 * .001 * ButtonPressTime; }
+        { Settings.NumberHoldTime += 1.0 * .001 * ButtonPressTime; }
       break;
     case DownButton:            
       if(ButtonPressTime == 0)
-        { Settings.LimitHoldTime -= 1.0; }
+        { Settings.NumberHoldTime -= 1.0; }
       else
-        { Settings.LimitHoldTime -= 1.0 * .001 * ButtonPressTime; }
+        { Settings.NumberHoldTime -= 1.0 * .001 * ButtonPressTime; }
       break;
   } // switch(ButtonPressed)
 
   lcd.setCursor(0,0);
   lcd.print("Number Peak Hold");
   lcd.setCursor(0,1);
-  lcd.print( Settings.LimitHoldTime, 0 );
+  lcd.print( Settings.NumberHoldTime, 0 );
   lcd.print(" msec           ");  // finish out the line 
 }
 
