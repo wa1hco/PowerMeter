@@ -121,8 +121,8 @@ volatile float fAdcUpCoef;     // Time since peak updated
 volatile float fAdcDecayCoef;  // Time since peak updated
 
 // Define the analog inputs
-struct analog_t PwrRev;       // Power, Reverse from sampling
-struct analog_t PwrFwd;       // Power, Forward from sampling
+struct analog_t AnalogRev;       // Power, Reverse from sampling
+struct analog_t AnalogFwd;       // Power, Forward from sampling
 
 // button press processing
 static int ButtonPressTime = 0;  // msec, starts at 0, how long pressed
@@ -177,14 +177,14 @@ char LcdString[17];  // for sprintf, include null term, needed ???
 void UpdateAnalogInputs() 
 {
   // read from the ADC twice, close together in time
-  PwrFwd.iAdc = analogRead(PwrFwd.Pin); // read the raw ADC value 
-  PwrRev.iAdc = analogRead(PwrRev.Pin); // read the raw ADC value 
+  AnalogFwd.iAdc = analogRead(AnalogFwd.Pin); // read the raw ADC value 
+  AnalogRev.iAdc = analogRead(AnalogRev.Pin); // read the raw ADC value 
   
-#ifdef DEBUG
+//#ifdef DEBUG
   // Create a test input
-  PwrFwd.iAdc = 0x3ff & (int) millis() >> 3 ;
-  PwrRev.iAdc = 0x3ff & (int) millis() >> 3 ;
-#endif
+  AnalogFwd.iAdc = 0x3ff & (int) millis() >> 3 ;
+  AnalogRev.iAdc = 0x3ff & (int) millis() >> 3 ;
+//#endif
 
   // IIR filter (1-a) * history + a * new
   // a = 1/(TC / IRQ interval), calculated on Tc change, 
@@ -193,30 +193,30 @@ void UpdateAnalogInputs()
   // computing the IIR filters on Fwd and Rev here in interrupt context
   // able to have more time precision filtering ADC values
  
-  if(PwrFwd.iAdc > PwrFwd.iAdcAvg)
+  if(AnalogFwd.iAdc > AnalogFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * +fAdcUpCoef    + PwrFwd.iAdcAvg * (1.0-fAdcUpCoef) );
+      AnalogFwd.iAdcAvg = (int)( AnalogFwd.iAdc * +fAdcUpCoef    + AnalogFwd.iAdcAvg * (1.0-fAdcUpCoef) );
     }
-  else if(PwrFwd.iAdc < PwrFwd.iAdcAvg)
+  else if(AnalogFwd.iAdc < AnalogFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * -fAdcDecayCoef + PwrFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
+      AnalogFwd.iAdcAvg = (int)( AnalogFwd.iAdc * -fAdcDecayCoef + AnalogFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
     }
   
-  if(PwrRev.iAdc > PwrRev.iAdcAvg)
+  if(AnalogRev.iAdc > AnalogRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * +fAdcUpCoef    + PwrRev.iAdcAvg * (1.0-fAdcUpCoef) );
+      AnalogRev.iAdcAvg = (int)( AnalogRev.iAdc * +fAdcUpCoef    + AnalogRev.iAdcAvg * (1.0-fAdcUpCoef) );
     }
-  else if(PwrRev.iAdc < PwrRev.iAdcAvg)
+  else if(AnalogRev.iAdc < AnalogRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * -fAdcDecayCoef + PwrRev.iAdcAvg * (1.0-fAdcDecayCoef) );
+      AnalogRev.iAdcAvg = (int)( AnalogRev.iAdc * -fAdcDecayCoef + AnalogRev.iAdcAvg * (1.0-fAdcDecayCoef) );
     }
   
   static int FwdPeakTimer = 0;
   static int RevPeakTimer = 0;
   
-  if(PwrFwd.iAdc > PwrFwd.iAdcPeak)
+  if(AnalogFwd.iAdc > AnalogFwd.iAdcPeak)
     {
-      PwrFwd.iAdcPeak = PwrFwd.iAdc;
+      AnalogFwd.iAdcPeak = AnalogFwd.iAdc;
       FwdPeakTimer = 0;
     }
   else  // Peak Holding
@@ -224,13 +224,13 @@ void UpdateAnalogInputs()
       FwdPeakTimer += TimeBetweenInterrupts;
       if( FwdPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
-        PwrFwd.iAdcPeak = PwrFwd.iAdc;
+        AnalogFwd.iAdcPeak = AnalogFwd.iAdc;
         FwdPeakTimer = Settings.NumberHoldTime;
       }
     }  
-   if(PwrRev.iAdc > PwrRev.iAdcPeak)
+   if(AnalogRev.iAdc > AnalogRev.iAdcPeak)
     {
-      PwrRev.iAdcPeak = PwrRev.iAdc;
+      AnalogRev.iAdcPeak = AnalogRev.iAdc;
       RevPeakTimer = 0;
     }
   else  // Peak Holding
@@ -238,7 +238,7 @@ void UpdateAnalogInputs()
       RevPeakTimer += TimeBetweenInterrupts;
       if( RevPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
-        PwrRev.iAdcPeak = PwrRev.iAdc;
+        AnalogRev.iAdcPeak = AnalogRev.iAdc;
         RevPeakTimer = Settings.NumberHoldTime;
       }
     }    
@@ -292,25 +292,21 @@ void SmoothDisplay(struct analog_t *sig, float value)
 // Calculate Power 
 //  Fills in Fwd and Rev Power global variables
 //  reads current peak power from ADC and writes Watts
-void CalculatePower()
+void CalculatePower(struct analog_t *Analog)
 {
   // iAdcAvg smooth with fast attack, slow decay, make access to iAdcAvg atomic
   noInterrupts();
-  PwrFwd.fVoltsAvg  = PwrFwd.fCal * PwrFwd.iAdcAvg;
-  PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
+  Analog->fVoltsAvg  = Analog->fCal * Analog->iAdcAvg;
   interrupts(); 
 
-  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg); 
-  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg); 
-  
+  Analog->fWattsBar = Watts(Settings.CouplerGainFwdDB, Analog->fVoltsOffset, Analog->fVoltsAvg); 
+   
   // Calculate power for the Number Display, which has a peak hold function
   noInterrupts();
-  PwrFwd.fVoltsPeak  = PwrFwd.fCal * PwrFwd.iAdcPeak;
-  PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
+  Analog->fVoltsPeak  = Analog->fCal * Analog->iAdcPeak;
   interrupts(); 
   
-  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak); 
-  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak); 
+  Analog->fWattsNum = Watts(Settings.CouplerGainFwdDB, Analog->fVoltsOffset, Analog->fVoltsPeak); 
 } // CalculatePower()
 
 //******************************************************************************
@@ -363,21 +359,23 @@ void DisplayPower()
   static int RevHoldTime = 0;
   
   // Forward: Numbers, Bar graph, Alert processing
-  CalculatePower();  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
+  CalculatePower(&AnalogFwd);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
   
   lcd.setCursor(0,0);
   lcd.print("F ");
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsNum);
+  sprintf(LcdString, "%4d", (int) AnalogFwd.fWattsNum);
   lcd.print(LcdString);
 
-  DrawBar(6, 0, (int)(PwrFwd.fWattsBar/Settings.BarScaleFwd * 1023));  
+  DrawBar(6, 0, (int)(AnalogFwd.fWattsBar/Settings.BarScaleFwd * 1023));  
+
+  CalculatePower(&AnalogRev);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
 
   lcd.setCursor(0,1);
   lcd.print("R ");
-  sprintf(LcdString, "%4d", (int) PwrRev.fWattsNum);
+  sprintf(LcdString, "%4d", (int) AnalogRev.fWattsNum);
   lcd.print(LcdString);
 
-  DrawBar(6, 1, (int)(PwrRev.fWattsBar/Settings.BarScaleRev * 1023));
+  DrawBar(6, 1, (int)(AnalogRev.fWattsBar/Settings.BarScaleRev * 1023));
   
 } //Display Values
 
@@ -416,17 +414,17 @@ void DisplayPower()
 void serial()
 {
 //#ifdef DEBUG
-  Serial.print(PwrFwd.iAdc);
+  Serial.print(AnalogFwd.iAdc);
   Serial.print(" ");
-  Serial.print(PwrFwd.iAdcAvg);
+  Serial.print(AnalogFwd.iAdcAvg);
   Serial.print(" ");
-  Serial.print(PwrFwd.iAdcPeak);
+  Serial.print(AnalogFwd.iAdcPeak);
   Serial.print("  ");
-  Serial.print(PwrFwd.fVoltsAvg,6);
+  Serial.print(AnalogFwd.fVoltsAvg,6);
   Serial.print("  ");
-  Serial.print(PwrFwd.fWattsBar,6);
+  Serial.print(AnalogFwd.fWattsBar,6);
   Serial.print(" ");
-  Serial.print(PwrFwd.fVoltsAvg - PwrFwd.fVoltsOffset,6);
+  Serial.print(AnalogFwd.fVoltsAvg - AnalogFwd.fVoltsOffset,6);
   Serial.print("  ");
   Serial.print(fAdcUpCoef,6);
   Serial.print("  ");
@@ -478,8 +476,8 @@ void FwdCalControl(int ButtonPressed, int ButtonPressTime)
   // second line shows current Power level
   lcd.setCursor(0,1);
   lcd.print("Fwd Pwr ");
-  CalculatePower();
-  sprintf(LcdString, "%4d", (int) PwrFwd.fWattsBar);
+  CalculatePower(&AnalogFwd);
+  sprintf(LcdString, "%4d", (int) AnalogFwd.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
 }
@@ -518,8 +516,8 @@ void RevCalControl(int ButtonPressed, int ButtonPressTime)
   // Second line, current reflected power
   lcd.setCursor(0,1);
   lcd.print("Rev Pwr ");
-  CalculatePower();
-  sprintf(LcdString, "%4d", (int) PwrRev.fWattsBar);
+  CalculatePower(&AnalogRev);
+  sprintf(LcdString, "%4d", (int) AnalogRev.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
 }
@@ -668,7 +666,7 @@ void BarScaleFwdControl(int ButtonPressed, int ButtonPressTime)
   } // switch(ButtonPressed)
 
   lcd.setCursor(0,0);
-  lcd.print("Bar Fwd Max ");
+  lcd.print("Bar Fwd Max (W) ");
   lcd.setCursor(0,1);
   lcd.print(Settings.BarScaleFwd, 0 );
   lcd.print("                ");  // finish out the line with blanks  
@@ -702,7 +700,7 @@ void BarScaleRevControl(int ButtonPressed, int ButtonPressTime)
   } // switch(ButtonPressed)
 
   lcd.setCursor(0,0);
-  lcd.print("Bar Rev Max ");
+  lcd.print("Bar Rev Max (W) ");
   lcd.setCursor(0,1);
   lcd.print(Settings.BarScaleRev, 0);
   lcd.print("                ");  // finish out the line with blanks  
@@ -1127,16 +1125,16 @@ void setup()
   // The delay above give the ADC and LTC5507 time settle down (if necessary)
 
   // Button pin = A0 
-  PwrFwd.Pin = A1;  // input pin for forward Power
-  PwrRev.Pin = A2;  // input pin for reverse Power
+  AnalogFwd.Pin = A1;  // input pin for forward Power
+  AnalogRev.Pin = A2;  // input pin for reverse Power
    
   // Power Cal start with converting to volts
-  PwrFwd.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
-  PwrRev.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
+  AnalogFwd.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
+  AnalogRev.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
 
   // Read Forward and Reverse ADC values, assuming no RF to set Vol
-  PwrFwd.fVolts = PwrFwd.fCal * analogRead(PwrFwd.Pin);
-  PwrRev.fVolts = PwrRev.fCal * analogRead(PwrRev.Pin);
+  AnalogFwd.fVolts = AnalogFwd.fCal * analogRead(AnalogFwd.Pin);
+  AnalogRev.fVolts = AnalogRev.fCal * analogRead(AnalogRev.Pin);
   
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
@@ -1144,13 +1142,13 @@ void setup()
   fAdcUpCoef    = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
   fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
 
-  PwrFwd.fVoltsOffset = PwrFwd.fVolts;
-  PwrRev.fVoltsOffset = PwrRev.fVolts;
+  AnalogFwd.fVoltsOffset = AnalogFwd.fVolts;
+  AnalogRev.fVoltsOffset = AnalogRev.fVolts;
 
  #ifdef DEBUG
   // for debug purposes
-  PwrFwd.fVoltsOffset = 0.6;
-  PwrRev.fVoltsOffset = 0.6;
+  AnalogFwd.fVoltsOffset = 0.6;
+  AnalogRev.fVoltsOffset = 0.6;
  #endif
  
   // The serial port 
