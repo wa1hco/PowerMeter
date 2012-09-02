@@ -117,8 +117,8 @@ struct analog_t
 // Bar dynamics...operates on Watts
 // Set UpCoef to about 5-10 msec to smooth over instantaneous peaks
 // Set DecayCoef to about 250 msec to create some bar graph hang time
-volatile float fAdcUpCoef;     // Time since peak updated
-volatile float fAdcDecayCoef;  // Time since peak updated
+volatile float fWattsUpCoef;     // Time since peak updated
+volatile float fWattsDecayCoef;  // Time since peak updated
 
 // Define the analog inputs
 struct analog_t PwrRev;       // Power, Reverse from sampling
@@ -161,7 +161,7 @@ struct settings_t
   float BarScaleRev;       // 1 to 5000 Watts
   float BarAvgTc;          // 0 to 1000 msec
   float BarDecayTc;        // 0 to 2000 msec
-  float NumberHoldTime;     // 0 to 1000 msec
+  float NumberHoldTime;    // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -195,20 +195,20 @@ void UpdateAnalogInputs()
  
   if(PwrFwd.iAdc > PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * +fAdcUpCoef    + PwrFwd.iAdcAvg * (1.0-fAdcUpCoef) );
+      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * +fWattsUpCoef    + PwrFwd.iAdcAvg * (1.0-fWattsUpCoef) );
     }
   else if(PwrFwd.iAdc < PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * -fAdcDecayCoef + PwrFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
+      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * -fWattsDecayCoef + PwrFwd.iAdcAvg * (1.0-fWattsDecayCoef) );
     }
   
   if(PwrRev.iAdc > PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * +fAdcUpCoef    + PwrRev.iAdcAvg * (1.0-fAdcUpCoef) );
+      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * +fWattsUpCoef    + PwrRev.iAdcAvg * (1.0-fWattsUpCoef) );
     }
   else if(PwrRev.iAdc < PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * -fAdcDecayCoef + PwrRev.iAdcAvg * (1.0-fAdcDecayCoef) );
+      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * -fWattsDecayCoef + PwrRev.iAdcAvg * (1.0-fWattsDecayCoef) );
     }
   
   static int FwdPeakTimer = 0;
@@ -288,31 +288,6 @@ void SmoothDisplay(struct analog_t *sig, float value)
   }
 }
 
-//**********************************************************************
-// Calculate Power 
-//  Fills in Fwd and Rev Power global variables
-//  reads current peak power from ADC and writes Watts
-void CalculatePower()
-{
-  // iAdcAvg smooth with fast attack, slow decay, make access to iAdcAvg atomic
-  noInterrupts();
-  PwrFwd.fVoltsAvg  = PwrFwd.fCal * PwrFwd.iAdcAvg;
-  PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
-  interrupts(); 
-
-  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg); 
-  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg); 
-  
-  // Calculate power for the Number Display, which has a peak hold function
-  noInterrupts();
-  PwrFwd.fVoltsPeak  = PwrFwd.fCal * PwrFwd.iAdcPeak;
-  PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
-  interrupts(); 
-  
-  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak); 
-  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak); 
-} // CalculatePower()
-
 //******************************************************************************
 // DrawBar -- draw a bar on one row of the LCD
 //   Place, starting point for bar gragh
@@ -362,8 +337,28 @@ void DisplayPower()
   static int FwdHoldTime = 0;
   static int RevHoldTime = 0;
   
-  // Forward: Numbers, Bar graph, Alert processing
-  CalculatePower();  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
+  // Calculate Power 
+  //  Fills in Fwd and Rev Power global variables
+  //  reads current ADC va and writes Watts
+  //  iAdcAvg smoothed with fast attack, 
+
+  // slow decay, make access to iAdcAvg atomic
+  noInterrupts();
+  PwrFwd.fVoltsAvg  = PwrFwd.fCal * PwrFwd.iAdcAvg;
+  PwrRev.fVoltsAvg  = PwrRev.fCal * PwrRev.iAdcAvg;
+  interrupts(); 
+
+  PwrFwd.fWattsBar = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsAvg); 
+  PwrRev.fWattsBar = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsAvg); 
+  
+  // Calculate power for the Number Display, which has a peak hold function
+  noInterrupts();
+  PwrFwd.fVoltsPeak  = PwrFwd.fCal * PwrFwd.iAdcPeak;
+  PwrRev.fVoltsPeak  = PwrRev.fCal * PwrFwd.iAdcPeak;
+  interrupts(); 
+  
+  PwrFwd.fWattsNum = Watts(Settings.CouplerGainFwdDB, PwrFwd.fVoltsOffset, PwrFwd.fVoltsPeak); 
+  PwrRev.fWattsNum = Watts(Settings.CouplerGainRevDB, PwrRev.fVoltsOffset, PwrRev.fVoltsPeak); 
   
   lcd.setCursor(0,0);
   lcd.print("F ");
@@ -428,9 +423,9 @@ void serial()
   Serial.print(" ");
   Serial.print(PwrFwd.fVoltsAvg - PwrFwd.fVoltsOffset,6);
   Serial.print("  ");
-  Serial.print(fAdcUpCoef,6);
+  Serial.print(fWattsUpCoef,6);
   Serial.print("  ");
-  Serial.print(fAdcDecayCoef,6);
+  Serial.print(fWattsDecayCoef,6);
   Serial.print("\n");
 //#endif
 
@@ -744,7 +739,7 @@ void BarAvgTcControl(int ButtonPressed, int ButtonPressTime)
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
   // BarAvgTc and TimerBetweenInterrupts in msec
-  fAdcUpCoef = 1.0/( Settings.BarAvgTc / (float) TimeBetweenInterrupts );
+  fWattsUpCoef = 1.0/( Settings.BarAvgTc / (float) TimeBetweenInterrupts );
 
   lcd.setCursor(0,0);
   lcd.print("Bar Avg ms   ");
@@ -790,7 +785,7 @@ void BarDecayTcControl(int ButtonPressed, int ButtonPressTime)
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
   // BarAvgTc and TimerBetweenInterrupts in msec
-  fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );
+  fWattsDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );
 
   lcd.setCursor(0,0);
   lcd.print("Bar Decay ms   ");
@@ -1141,8 +1136,8 @@ void setup()
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
   // BarAvgTc and TimerBetweenInterrupts in msec
-  fAdcUpCoef    = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
-  fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
+  fWattsUpCoef  = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
+  fWattsDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
 
   PwrFwd.fVoltsOffset = PwrFwd.fVolts;
   PwrRev.fVoltsOffset = PwrRev.fVolts;
