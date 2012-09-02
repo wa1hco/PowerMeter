@@ -192,53 +192,54 @@ void UpdateAnalogInputs()
   
   // computing the IIR filters on Fwd and Rev here in interrupt context
   // able to have more time precision filtering ADC values
-  
  
   if(PwrFwd.iAdc > PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( (float)PwrFwd.iAdc * +fAdcUpCoef   + (float)PwrFwd.iAdcAvg * (1.0-fAdcUpCoef) );
+      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * +fAdcUpCoef    + PwrFwd.iAdcAvg * (1.0-fAdcUpCoef) );
     }
   else if(PwrFwd.iAdc < PwrFwd.iAdcAvg)
     {
-      PwrFwd.iAdcAvg = (int)( (float)PwrFwd.iAdc * -fAdcDecayCoef + (float)PwrFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
+      PwrFwd.iAdcAvg = (int)( PwrFwd.iAdc * -fAdcDecayCoef + PwrFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
     }
   
   if(PwrRev.iAdc > PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)(PwrRev.iAdc * +fAdcUpCoef + PwrRev.iAdcAvg * (1.0-fAdcUpCoef));
+      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * +fAdcUpCoef    + PwrRev.iAdcAvg * (1.0-fAdcUpCoef) );
     }
   else if(PwrRev.iAdc < PwrRev.iAdcAvg)
     {
-      PwrRev.iAdcAvg = (int)(PwrRev.iAdc * -fAdcDecayCoef + PwrRev.iAdcAvg * (1.0-fAdcDecayCoef));
+      PwrRev.iAdcAvg = (int)( PwrRev.iAdc * -fAdcDecayCoef + PwrRev.iAdcAvg * (1.0-fAdcDecayCoef) );
     }
   
-  static int NumberPeakTimer = 0;
+  static int FwdPeakTimer = 0;
+  static int RevPeakTimer = 0;
+  
   if(PwrFwd.iAdc > PwrFwd.iAdcPeak)
     {
       PwrFwd.iAdcPeak = PwrFwd.iAdc;
-      NumberPeakTimer = 0;
+      FwdPeakTimer = 0;
     }
   else  // Peak Holding
     {
-      NumberPeakTimer += TimeBetweenInterrupts;
-      if( NumberPeakTimer > Settings.NumberHoldTime) // Peak held long enough
+      FwdPeakTimer += TimeBetweenInterrupts;
+      if( FwdPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
         PwrFwd.iAdcPeak = PwrFwd.iAdc;
-        NumberPeakTimer = Settings.NumberHoldTime;
+        FwdPeakTimer = Settings.NumberHoldTime;
       }
     }  
    if(PwrRev.iAdc > PwrRev.iAdcPeak)
     {
       PwrRev.iAdcPeak = PwrRev.iAdc;
-      NumberPeakTimer = 0;
+      RevPeakTimer = 0;
     }
   else  // Peak Holding
     {
-      NumberPeakTimer += TimeBetweenInterrupts;
-      if( NumberPeakTimer > Settings.NumberHoldTime) // Peak held long enough
+      RevPeakTimer += TimeBetweenInterrupts;
+      if( RevPeakTimer > Settings.NumberHoldTime) // Peak held long enough
       {
         PwrRev.iAdcPeak = PwrRev.iAdc;
-        NumberPeakTimer = Settings.NumberHoldTime;
+        RevPeakTimer = Settings.NumberHoldTime;
       }
     }    
 } // UpdateAnalogInputs()
