@@ -190,25 +190,15 @@ void UpdateAnalogInputs()
   
   // computing the IIR filters on Fwd and Rev here in interrupt context
   // able to have more time precision filtering ADC values
- 
-  if(AnalogFwd.iAdc > AnalogFwd.iAdcAvg)
-    {
-      AnalogFwd.iAdcAvg = AnalogFwd.iAdcAvg * (1.0-fAdcUpCoef)    + AnalogFwd.iAdc * fAdcUpCoef;
-    }
-  else if(AnalogFwd.iAdc < AnalogFwd.iAdcAvg)
-    {
-      AnalogFwd.iAdcAvg = AnalogFwd.iAdcAvg * (1.0-fAdcDecayCoef) + AnalogFwd.iAdc * fAdcDecayCoef;
-    }
+  float Coeff;
+  if(     AnalogFwd.iAdc > AnalogFwd.iAdcAvg) { Coeff = fAdcUpCoef; }
+  else if(AnalogFwd.iAdc < AnalogFwd.iAdcAvg) { Coeff = fAdcDecayCoef; }
+  AnalogFwd.iAdcAvg = AnalogFwd.iAdcAvg * (1.0-Coeff) + AnalogFwd.iAdc * Coeff;
   
-  if(AnalogRev.iAdc > AnalogRev.iAdcAvg)
-    {
-      AnalogRev.iAdcAvg = AnalogRev.iAdcAvg * (1.0-fAdcUpCoef)    + AnalogRev.iAdc * +fAdcUpCoef;
-    }
-  else if(AnalogRev.iAdc < AnalogRev.iAdcAvg)
-    {
-      AnalogRev.iAdcAvg = AnalogRev.iAdcAvg * (1.0-fAdcDecayCoef) + AnalogRev.iAdc * fAdcDecayCoef;
-    }
-  
+  if(     AnalogRev.iAdc > AnalogRev.iAdcAvg) { Coeff = fAdcUpCoef; }
+  else if(AnalogRev.iAdc < AnalogRev.iAdcAvg) { Coeff = fAdcDecayCoef; }
+  AnalogRev.iAdcAvg = AnalogRev.iAdcAvg * (1.0-Coeff) + AnalogRev.iAdc * Coeff;
+
   static int FwdPeakTimer = 0;
   static int RevPeakTimer = 0;
   
@@ -226,7 +216,8 @@ void UpdateAnalogInputs()
         FwdPeakTimer = Settings.NumberHoldTime;
       }
     }  
-   if(AnalogRev.iAdc > AnalogRev.iAdcPeak)
+
+  if(AnalogRev.iAdc > AnalogRev.iAdcPeak)
     {
       AnalogRev.iAdcPeak = AnalogRev.iAdc;
       RevPeakTimer = 0;
@@ -270,20 +261,6 @@ void TimedService()
 
   // debug
   IsrTime = micros() - IsrTime;
-}
-
-//*********************************************************************
-// Smooth Display so low order digits don't flicker
-// update display if changing or time elapsed
-// if (new - current) * time since last change > delay then update
-void SmoothDisplay(struct analog_t *sig, float value) 
-{
-  const float DisplayDelay = 300.0;  // selected by experiment
-  sig->DisplayTime += TimeBetweenDisplayUpdates;
-  if ( abs(value - sig->DisplayNow)*sig->DisplayTime > DisplayDelay ) {
-    sig->DisplayNow = value;
-    sig->DisplayTime=0;
-  }
 }
 
 //**********************************************************************
@@ -1104,7 +1081,7 @@ void loop()
     DisplayTime = micros();
     DisplayMachine();     // state machine based on ButtonPressed
     
-#ifdef DEBUT
+#ifdef DEBUG
     serial();
 #endif
   }
