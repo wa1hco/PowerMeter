@@ -71,8 +71,6 @@ float Watts( float CouplerGainFwdDB, float Vol, float Vo );
 void          FwdCalControl(int, int);  // gain of coupler (negative)
 void          RevCalControl(int, int);  // gain of coupler (negative)
 void       BacklightControl(int, int);  // 0 to 100%
-void        FwdLimitControl(int, int);  // Watts, when to indicate
-void        RevLimitControl(int, int);  // Watts, when to indicate
 void     BarScaleFwdControl(int, int);  // Max scale on bar graph
 void     BarScaleRevControl(int, int);  // Max scale on bar graph
 void NumbersHoldTimeControl(int, int);  //
@@ -154,14 +152,14 @@ struct settings_t
   float CouplerGainFwdDB;  // -10 to -60 dB
   float CouplerGainRevDB;  // -10 to -60 dB
   float BacklightLevel;    // 0 to 100%
-  float LimitRev;          // 0 to 300 Watts
-  float LimitFwd;          // 0 to 2000 Watts
+  float LimitRev;          // 0 to 300 Watts (unused, for now)
+  float LimitFwd;          // 0 to 2000 Watts (unused, for now)
   int   BarTypeIndex;      // {Watts, Square Law, dBm} (only Watts used, so far)
   float BarScaleFwd;       // 1 to 5000 Watts
   float BarScaleRev;       // 1 to 5000 Watts
   float BarAvgTc;          // 0 to 1000 msec
   float BarDecayTc;        // 0 to 2000 msec
-  float NumberHoldTime;     // 0 to 1000 msec
+  float NumberHoldTime;    // 0 to 1000 msec
 } Settings;  
 
 char LcdString[17];  // for sprintf, include null term, needed ???
@@ -180,11 +178,11 @@ void UpdateAnalogInputs()
   AnalogFwd.iAdc = analogRead(AnalogFwd.Pin); // read the raw ADC value 
   AnalogRev.iAdc = analogRead(AnalogRev.Pin); // read the raw ADC value 
   
-//#ifdef DEBUG
+#ifdef DEBUG
   // Create a test input
   AnalogFwd.iAdc = 0x3ff & (int) millis() >> 3 ;
   AnalogRev.iAdc = 0x3ff & (int) millis() >> 3 ;
-//#endif
+#endif
 
   // IIR filter (1-a) * history + a * new
   // a = 1/(TC / IRQ interval), calculated on Tc change, 
@@ -413,7 +411,7 @@ void DisplayPower()
 //-----------------------------------------
 void serial()
 {
-//#ifdef DEBUG
+#ifdef DEBUG
   Serial.print(AnalogFwd.iAdc);
   Serial.print(" ");
   Serial.print(AnalogFwd.iAdcAvg);
@@ -430,7 +428,7 @@ void serial()
   Serial.print("  ");
   Serial.print(fAdcDecayCoef,6);
   Serial.print("\n");
-//#endif
+#endif
 
 }
 
@@ -561,84 +559,6 @@ void BacklightControl(int ButtonPressed, int ButtonPressTime)
 } // BacklightControl()
 
 //******************************************************************************
-// Control for the Forward Power limit
-//  Check on range
-//  Up, Down button processing with hold time acceleration
-//  Display
-void FwdLimitControl(int ButtonPressed, int ButtonPressTime)
-{
-  // handle corrupt or unitialized EERPOM
-  const int   LimitFwdMin =   10;
-  const int   LimitFwdMax = 1500;
-  
-  // Check range, works for up/down, no button, EEPROM initialization
-  if (Settings.LimitFwd < LimitFwdMin)
-    { Settings.LimitFwd = LimitFwdMin; } 
-  if (Settings.LimitFwd > LimitFwdMax)
-    { Settings.LimitFwd = LimitFwdMax; }
-
-  switch (ButtonPressed)
-  {
-    case SelectButton:      // Still pressed from entering Control mode
-    case LeftButton:        // Still pressed
-    case RightButton:       // Still pressed
-      break;
-    case UpButton:
-      Settings.LimitFwd += 1 * .001 * ButtonPressTime;
-     break;
-    case DownButton:          
-      Settings.LimitFwd -= 1 * .001 * ButtonPressTime;
-     break;
-  } // switch(ButtonPressed)
-
-  lcd.setCursor(0,0);
-  lcd.print("Fwd Limit ");
-  lcd.print( (int) Settings.LimitFwd );
-  lcd.print("W         ");
-  lcd.setCursor(0,1);
-  lcd.print("                ");
-}
-
-//******************************************************************************
-// Control for the Reflected Power limit
-//  Check on range
-//  Up, Down button processing with hold time acceleration
-//  Display
-void RevLimitControl(int ButtonPressed, int ButtonPressTime)
-{
-  // handle corrupt or unitialized EERPOM 
-  const int   LimitRevMin =  10;
-  const int   LimitRevMax = 300;
-
-  // Check range, works for up/down, no button, EEPROM initialization
-  if (Settings.LimitRev < LimitRevMin)
-    { Settings.LimitRev = LimitRevMin; }     
-  if (Settings.LimitRev > LimitRevMax)
-    { Settings.LimitRev = LimitRevMax; }
-
-  switch (ButtonPressed)
-  {
-    case SelectButton:      // pressed to exit Select mode
-    case LeftButton:        // after changing to this mode from Left
-    case RightButton:       // after changing to this mode from Right
-      break;
-    case UpButton:            
-      Settings.LimitRev += 1 * .001 * ButtonPressTime;
-      break;
-    case DownButton:
-      Settings.LimitRev -= 1 * .001 * ButtonPressTime;
-      break;
-  } // switch(ButtonPressed)
-
-  lcd.setCursor(0,0);
-  lcd.print("Rev Limit ");
-  lcd.print( (int) Settings.LimitRev );
-  lcd.print("W        ");
-  lcd.setCursor(0,1);
-  lcd.print("                ");
-}
-
-//******************************************************************************
 // Define the Bar Scale
 void BarScaleFwdControl(int ButtonPressed, int ButtonPressTime)
 {
@@ -745,7 +665,7 @@ void BarAvgTcControl(int ButtonPressed, int ButtonPressTime)
   fAdcUpCoef = 1.0/( Settings.BarAvgTc / (float) TimeBetweenInterrupts );
 
   lcd.setCursor(0,0);
-  lcd.print("Bar Avg ms   ");
+  lcd.print("Bar Avg (ms)    ");
   lcd.setCursor(0,1);
   lcd.print(Settings.BarAvgTc, 0);
   lcd.print("                ");  // finish out the line with blanks  
@@ -791,14 +711,14 @@ void BarDecayTcControl(int ButtonPressed, int ButtonPressTime)
   fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );
 
   lcd.setCursor(0,0);
-  lcd.print("Bar Decay ms   ");
+  lcd.print("Bar Decay (ms)  ");
   lcd.setCursor(0,1);
   lcd.print( Settings.BarDecayTc, 0 );
   lcd.print("                ");  // finish out the line with blanks  
 }
 
 //******************************************************************************
-// Define the Bar Decay Time Constand
+// Define the Number Display Peak Hold Time
 //
 void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
 {
@@ -838,12 +758,6 @@ void NumbersHoldTimeControl(int ButtonPressed, int ButtonPressTime)
   lcd.print(" msec           ");  // finish out the line 
 }
 
-//***********************************************************************
-void ProcessPowerDisplay()
-{
-  DisplayPower();      // LCD numbers, P.fwd and P.rev   
-}
-
 //******************************************************************************
 // state machine, Entered at timed intervals
 // switch on Control vs Power Display mode
@@ -874,9 +788,7 @@ void DisplayMachine()
              FwdCalControl,
              RevCalControl,
           BacklightControl,
-           FwdLimitControl,
-           RevLimitControl,
-        BarScaleFwdControl,
+       BarScaleFwdControl,
         BarScaleRevControl,
            BarAvgTcControl,
          BarDecayTcControl,
@@ -886,17 +798,15 @@ void DisplayMachine()
   const char            FwdMode =  0;
   const char            RevMode =  1;
   const char      BacklightMode =  2;
-  const char       FwdLimitMode =  3;
-  const char       RevLimitMode =  4;
-  const char    BarScaleFwdMode =  5;
-  const char    BarScaleRevMode =  6;
-  const char       BarAvgTcMode =  7;
-  const char     BarDecayTcMode =  8;
-  const char NumbersHoldTimeMode = 9;
+  const char    BarScaleFwdMode =  3;
+  const char    BarScaleRevMode =  4;
+  const char       BarAvgTcMode =  5;
+  const char     BarDecayTcMode =  6;
+  const char NumbersHoldTimeMode = 7;
   
   static int ModeIndex    = 0;
    const int ModeIndexMin = 0;
-   const int ModeIndexMax = 9;
+   const int ModeIndexMax = 7;
 
   ReadButton();  // sets value of ButtonPressed and ButtonPressTime
 
@@ -963,7 +873,7 @@ void DisplayMachine()
   else if(DisplayState == PowerMode)
   {
     // Buttons don't matter, Select button alread processed
-    ProcessPowerDisplay();
+    DisplayPower();
   }
 
   else if(DisplayState == ControlMode)  // Control mode or Power Mode
@@ -1120,7 +1030,7 @@ void setup()
   lcd.print("Power Meter v1.0");
   lcd.setCursor(0,1);
   lcd.print("   by WA1HCO    ");
-  delay(3000);  // 3000 ms, 3 seconds
+  delay(2000);  // 2000 ms, 2 seconds
   
   // The delay above give the ADC and LTC5507 time settle down (if necessary)
 
@@ -1130,30 +1040,42 @@ void setup()
    
   // Power Cal start with converting to volts
   AnalogFwd.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
-  AnalogRev.fCal = 1.0 / (float) AdcMaxCount * AdcMaxVolts; // iAdc to float Volts
+  AnalogRev.fCal = AnalogFwd.fCal; // Same ADC to Volts
 
   // Read Forward and Reverse ADC values, assuming no RF to set Vol
   AnalogFwd.fVolts = AnalogFwd.fCal * analogRead(AnalogFwd.Pin);
   AnalogRev.fVolts = AnalogRev.fCal * analogRead(AnalogRev.Pin);
   
+  AnalogFwd.fVoltsOffset = AnalogFwd.fVolts;
+  AnalogRev.fVoltsOffset = AnalogRev.fVolts;
+
+#ifdef DEBUG
+  // for debug purposes
+  AnalogFwd.fVoltsOffset = 0.6;
+  AnalogRev.fVoltsOffset = 0.6;
+#endif
+
+  lcd.setCursor(0,0);
+  lcd.print("Offset Voltages ");
+  lcd.setCursor(0,1);
+  lcd.print("F ");
+  lcd.print(AnalogFwd.fVoltsOffset, 2);
+  lcd.print(" R ");
+  lcd.print(AnalogRev.fVoltsOffset, 2);
+  lcd.print("                ");
+  delay(2000);
+   
+#ifdef DEBUG
+  // The serial port 
+  Serial.begin(57600);
+#endif
+
   // compute iAdcIIR coefficient, 
   // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
   // BarAvgTc and TimerBetweenInterrupts in msec
   fAdcUpCoef    = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
   fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
 
-  AnalogFwd.fVoltsOffset = AnalogFwd.fVolts;
-  AnalogRev.fVoltsOffset = AnalogRev.fVolts;
-
- #ifdef DEBUG
-  // for debug purposes
-  AnalogFwd.fVoltsOffset = 0.6;
-  AnalogRev.fVoltsOffset = 0.6;
- #endif
- 
-  // The serial port 
-  Serial.begin(57600);
-  
   // setup the timer and start it
   // timer used to read values and run state machine
   MsTimer2::set(TimeBetweenInterrupts, TimedService); // 2ms period
