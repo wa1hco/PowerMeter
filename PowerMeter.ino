@@ -290,21 +290,21 @@ void SmoothDisplay(struct analog_t *sig, float value)
 // Calculate Power 
 //  Fills in Fwd and Rev Power global variables
 //  reads current peak power from ADC and writes Watts
-void CalculatePower(struct analog_t *Analog)
+void CalculatePower(struct analog_t *Analog, float CouplerGainDB)
 {
   // iAdcAvg smooth with fast attack, slow decay, make access to iAdcAvg atomic
   noInterrupts();
   Analog->fVoltsAvg  = Analog->fCal * Analog->iAdcAvg;
   interrupts(); 
 
-  Analog->fWattsBar = Watts(Settings.CouplerGainFwdDB, Analog->fVoltsOffset, Analog->fVoltsAvg); 
+  Analog->fWattsBar = Watts(CouplerGainDB, Analog->fVoltsOffset, Analog->fVoltsAvg); 
    
   // Calculate power for the Number Display, which has a peak hold function
   noInterrupts();
   Analog->fVoltsPeak  = Analog->fCal * Analog->iAdcPeak;
   interrupts(); 
   
-  Analog->fWattsNum = Watts(Settings.CouplerGainFwdDB, Analog->fVoltsOffset, Analog->fVoltsPeak); 
+  Analog->fWattsNum = Watts(CouplerGainDB, Analog->fVoltsOffset, Analog->fVoltsPeak); 
 } // CalculatePower()
 
 //******************************************************************************
@@ -357,7 +357,7 @@ void DisplayPower()
   static int RevHoldTime = 0;
   
   // Forward: Numbers, Bar graph, Alert processing
-  CalculatePower(&AnalogFwd);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
+  CalculatePower(&AnalogFwd, Settings.CouplerGainFwdDB);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
   
   lcd.setCursor(0,0);
   lcd.print("F ");
@@ -366,7 +366,7 @@ void DisplayPower()
 
   DrawBar(6, 0, (int)(AnalogFwd.fWattsBar/Settings.BarScaleFwd * 1023));  
 
-  CalculatePower(&AnalogRev);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
+  CalculatePower(&AnalogRev, Settings.CouplerGainRevDB);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
 
   lcd.setCursor(0,1);
   lcd.print("R ");
@@ -474,7 +474,7 @@ void FwdCalControl(int ButtonPressed, int ButtonPressTime)
   // second line shows current Power level
   lcd.setCursor(0,1);
   lcd.print("Fwd Pwr ");
-  CalculatePower(&AnalogFwd);
+  CalculatePower(&AnalogFwd, Settings.CouplerGainFwdDB);
   sprintf(LcdString, "%4d", (int) AnalogFwd.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
@@ -514,7 +514,7 @@ void RevCalControl(int ButtonPressed, int ButtonPressTime)
   // Second line, current reflected power
   lcd.setCursor(0,1);
   lcd.print("Rev Pwr ");
-  CalculatePower(&AnalogRev);
+  CalculatePower(&AnalogRev, Settings.CouplerGainRevDB);
   sprintf(LcdString, "%4d", (int) AnalogRev.fWattsBar);
   lcd.print(LcdString);
   lcd.print("W       ");
@@ -1102,7 +1102,8 @@ void loop()
     DisplayTime = micros();
     DisplayMachine();     // state machine based on ButtonPressed
     
+#ifdef DEBUT
     serial();
-    
+#endif
   }
 }
