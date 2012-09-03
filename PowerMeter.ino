@@ -193,20 +193,20 @@ void UpdateAnalogInputs()
  
   if(AnalogFwd.iAdc > AnalogFwd.iAdcAvg)
     {
-      AnalogFwd.iAdcAvg = (int)( AnalogFwd.iAdc * +fAdcUpCoef    + AnalogFwd.iAdcAvg * (1.0-fAdcUpCoef) );
+      AnalogFwd.iAdcAvg = AnalogFwd.iAdcAvg * (1.0-fAdcUpCoef)    + AnalogFwd.iAdc * fAdcUpCoef;
     }
   else if(AnalogFwd.iAdc < AnalogFwd.iAdcAvg)
     {
-      AnalogFwd.iAdcAvg = (int)( AnalogFwd.iAdc * -fAdcDecayCoef + AnalogFwd.iAdcAvg * (1.0-fAdcDecayCoef) );
+      AnalogFwd.iAdcAvg = AnalogFwd.iAdcAvg * (1.0-fAdcDecayCoef) + AnalogFwd.iAdc * fAdcDecayCoef;
     }
   
   if(AnalogRev.iAdc > AnalogRev.iAdcAvg)
     {
-      AnalogRev.iAdcAvg = (int)( AnalogRev.iAdc * +fAdcUpCoef    + AnalogRev.iAdcAvg * (1.0-fAdcUpCoef) );
+      AnalogRev.iAdcAvg = AnalogRev.iAdcAvg * (1.0-fAdcUpCoef)    + AnalogRev.iAdc * +fAdcUpCoef;
     }
   else if(AnalogRev.iAdc < AnalogRev.iAdcAvg)
     {
-      AnalogRev.iAdcAvg = (int)( AnalogRev.iAdc * -fAdcDecayCoef + AnalogRev.iAdcAvg * (1.0-fAdcDecayCoef) );
+      AnalogRev.iAdcAvg = AnalogRev.iAdcAvg * (1.0-fAdcDecayCoef) + AnalogRev.iAdc * fAdcDecayCoef;
     }
   
   static int FwdPeakTimer = 0;
@@ -1070,11 +1070,13 @@ void setup()
   Serial.begin(57600);
 #endif
 
-  // compute iAdcIIR coefficient, 
-  // iAdcAvg = (1-iAdcIIR) * iAdcAvg + iAdcIIR * iAdc
+  // compute global iAdcIIR coefficients, 
+  // iAdcAvg = ...Coef * iAdc + (1-...Coef) * iAdcAvg 
+  // For example: BarDecayTc = 1000 ms
+  //   2/1000 = .002
   // BarAvgTc and TimerBetweenInterrupts in msec
-  fAdcUpCoef    = 1.0/( Settings.BarAvgTc   / (float) TimeBetweenInterrupts );
-  fAdcDecayCoef = 1.0/( Settings.BarDecayTc / (float) TimeBetweenInterrupts );  
+  fAdcUpCoef    = (float) TimeBetweenInterrupts / Settings.BarAvgTc;
+  fAdcDecayCoef = (float) TimeBetweenInterrupts / Settings.BarDecayTc ;  
 
   // setup the timer and start it
   // timer used to read values and run state machine
