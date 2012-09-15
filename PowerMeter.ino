@@ -57,7 +57,6 @@
 // include the library code:
 #include           <math.h>
 #include  <LiquidCrystal.h>
-#include  <avr/interrupt.h>
 #include       <MsTimer2.h>
 #include     <avr/eeprom.h>
 
@@ -65,7 +64,7 @@
 
 // Function Prototypes
 // Prototpye for external Watts function written by Matlab
-float Watts( float CouplerGainFwdDB, float Vol, float Vo );
+float Watts( float CouplerGainDB, float Vol, float Vo );
 
 // Function prototypes used for building function pointer table
 void          FwdCalControl(int, int);  // gain of coupler (negative)
@@ -321,18 +320,12 @@ void DrawBar (int StartCharLoc, int row, int ana)
 // Display power
 // This called from background
 // Convert to floating point, calibrate, display
-// Manage peak hold and smoothing update rates
 // converting ADC int to calibrated float takes 60 usec
 // dBm to W conversion takes 380 usec
 // called from main loop
 //------------------------------------------------------
 void DisplayPower() 
 {
-  static int iWattsFwdPeak = 0;
-  static int iWattsRevPeak = 0;
-  static int FwdHoldTime = 0;
-  static int RevHoldTime = 0;
-  
   // Forward: Numbers, Bar graph, Alert processing
   CalculatePower(&AnalogFwd, Settings.CouplerGainFwdDB);  // converts ADC values to Watts, Fwd and Rev, Number and Bar variants
   
@@ -765,21 +758,21 @@ void DisplayMachine()
              FwdCalControl,
              RevCalControl,
           BacklightControl,
-       BarScaleFwdControl,
+        BarScaleFwdControl,
         BarScaleRevControl,
            BarAvgTcControl,
          BarDecayTcControl,
      NumbersHoldTimeControl
   };
   
-  const char            FwdMode =  0;
-  const char            RevMode =  1;
-  const char      BacklightMode =  2;
-  const char    BarScaleFwdMode =  3;
-  const char    BarScaleRevMode =  4;
-  const char       BarAvgTcMode =  5;
-  const char     BarDecayTcMode =  6;
-  const char NumbersHoldTimeMode = 7;
+  const char             FwdMode =  0;
+  const char             RevMode =  1;
+  const char       BacklightMode =  2;
+  const char     BarScaleFwdMode =  3;
+  const char     BarScaleRevMode =  4;
+  const char        BarAvgTcMode =  5;
+  const char      BarDecayTcMode =  6;
+  const char NumbersHoldTimeMode =  7;
   
   static int ModeIndex    = 0;
    const int ModeIndexMin = 0;
