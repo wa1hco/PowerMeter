@@ -7,28 +7,26 @@ Uses the bar graph example by Anachrocomputer that was posted at
   http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1233339330
    
 Functions
-  Measure Voltage produce by LTC5507
-  Convert Voltage to Power in Watts
-  
-  Display on 2 rows by 16 column LCD
-    Numerical Power with short averaging and peak hold
-    Bar graph with attack and decay dynamics
-    Peak exceeded indication indication
-  Bar Graphs implement industry standard hold/decay times
-  
-  Calibration and Configuration saved in EEPROM
-    Directional couplers gains
-    Bar graph limits
-    Peak power limits, fwd/rev, for indicator
-    Backlight Level
+  Measure Voltage produce by LTC5507  
+  Convert Voltage to Power in Watts  
+  Display on 2 rows by 16 column LCD  
+    Numerical Power with short averaging and peak hold  
+    Bar graph with attack and decay dynamics  
+    Peak exceeded indication indication  
+  Bar Graphs implement industry standard hold/decay times  
+  Calibration and Configuration saved in EEPROM  
+    Directional couplers gains  
+    Bar graph limits  
+    Peak power limits, fwd/rev, for indicator  
+    Backlight Level  
 
-  Display
-    Forward Power
-    Reflected Power
-  Inputs to Controller
-    Forward Power DC from coupler with LTC5507
-    Reverse Power DC from coupler with LTC5507
-  Digital Inputs to Controller
+  Display  
+    Forward Power  
+    Reflected Power  
+  Inputs to Controller  
+    Forward Power DC from coupler with LTC5507  
+    Reverse Power DC from coupler with LTC5507  
+  Digital Inputs to Controller  
     None
   Outputs from Controller
     Everything on the LCD
