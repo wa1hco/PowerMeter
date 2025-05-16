@@ -9,16 +9,19 @@ Uses the bar graph example by Anachrocomputer that was posted at
 Functions
   Measure Voltage produce by LTC5507
   Convert Voltage to Power in Watts
-  Display on LCD
+  
+  Display on 2 rows by 16 column LCD
     Numerical Power with short averaging and peak hold
     Bar graph with attack and decay dynamics
     Peak exceeded indication indication
   Bar Graphs implement industry standard hold/decay times
+  
   Calibration and Configuration saved in EEPROM
-   Directional couplers gains
-   Bar graph limits
-   Peak power limits, fwd/rev, for indicator
-   Backlight Level
+    Directional couplers gains
+    Bar graph limits
+    Peak power limits, fwd/rev, for indicator
+    Backlight Level
+
   Display
     Forward Power
     Reflected Power
@@ -46,14 +49,13 @@ Functions
  
  Power Display Layout 
 
- F 2000********
- R 2000*****
- 
+  F 2000********
+  R 2000*****
 
  Control Display Layout 
 
- Fwd Cplr -40.0dB
- Pwr Fwd 200W  
+  Fwd Cplr -40.0dB
+  Pwr Fwd 200W  
 
 TODO:
    change coupler values from neg gain to pos loss????
